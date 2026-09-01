@@ -202,7 +202,7 @@ struct MainView: View {
 
                         SettingsPanel()
                             .padding(.top, 16)
-                            .transition(.opacity.combined(with: .move(from: .bottom)))
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
 
                     Text("Preview")
