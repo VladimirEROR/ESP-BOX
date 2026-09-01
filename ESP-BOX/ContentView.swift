@@ -171,7 +171,9 @@ struct ShakeEffect: GeometryEffect {
 // MARK: - MAIN SCREEN (ESP-BOX UI)
 // ============================================================
 struct MainView: View {
+    @StateObject private var hackState = HackState.shared
     @State private var showLoading = false
+    @State private var loadingStatus = ""
 
     var body: some View {
         ZStack {
@@ -193,6 +195,18 @@ struct MainView: View {
                     StatsGrid()
                         .padding(.top, 40)
 
+                    // Live status when connected
+                    if hackState.isConnected {
+                        LiveStatusCard()
+                            .padding(.top, 20)
+                            .transition(.opacity.combined(with: .move(from: .top)))
+
+                        // Settings panel
+                        SettingsPanel()
+                            .padding(.top, 16)
+                            .transition(.opacity.combined(with: .move(from: .bottom)))
+                    }
+
                     Text("Preview")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.white)
@@ -205,19 +219,32 @@ struct MainView: View {
                     InfoCard()
                         .padding(.top, 20)
 
-                    StartButton(action: { showLoading = true })
-                        .padding(.top, 10)
-                        .padding(.bottom, 30)
+                    StartButton(
+                        isConnected: hackState.isConnected,
+                        isTransitioning: hackState.isTransitioning
+                    ) {
+                        if hackState.isConnected {
+                            hackState.stopHack()
+                        } else {
+                            showLoading = true
+                        }
+                    }
+                    .padding(.top, 10)
+                    .padding(.bottom, 30)
                 }
                 .padding(.horizontal, 20)
             }
 
             if showLoading {
-                LoadingView(showLoading: $showLoading)
-                    .transition(.opacity)
-                    .zIndex(10)
+                RealLoadingView(
+                    showLoading: $showLoading,
+                    hackState: hackState
+                )
+                .transition(.opacity)
+                .zIndex(10)
             }
         }
+        .animation(.easeInOut(duration: 0.4), value: hackState.isConnected)
         .animation(.easeInOut(duration: 0.3), value: showLoading)
     }
 }
@@ -358,6 +385,252 @@ struct StatsGrid: View {
     }
 }
 
+// ============================================================
+// MARK: - LIVE STATUS (shown when connected)
+// ============================================================
+struct LiveStatusCard: View {
+    @ObservedObject var hackState = HackState.shared
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 12) {
+                // Pulsing green dot
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 10, height: 10)
+                    .shadow(color: .green, radius: 6)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.green.opacity(0.4), lineWidth: 1)
+                            .frame(width: 16, height: 16)
+                            .scaleEffect(hackState.isConnected ? 1.3 : 1.0)
+                            .animation(
+                                .easeInOut(duration: 1).repeatForever(autoreverses: true),
+                                value: hackState.isConnected
+                            )
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("CONNECTED")
+                        .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                        .foregroundColor(.green)
+
+                    Text("PID: \(hackState.mlbbPID) • Base: 0x\(String(hackState.baseAddress, radix: 16).uppercased())")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(red: 0.72, green: 0.44, blue: 0.44))
+                }
+
+                Spacer()
+
+                // FPS badge
+                VStack(spacing: 2) {
+                    Text("\(hackState.currentFPS)")
+                        .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                        .foregroundColor(Color(red: 1, green: 0.55, blue: 0.3))
+                    Text("FPS")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(Color(red: 1, green: 0.55, blue: 0.3).opacity(0.6))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(red: 1, green: 0.55, blue: 0.3).opacity(0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(red: 1, green: 0.55, blue: 0.3).opacity(0.3), lineWidth: 1)
+                        )
+                )
+            }
+
+            HStack {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(red: 1, green: 0.3, blue: 0.3))
+
+                Text("Players: \(hackState.entityCount)")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(Color(red: 1, green: 0.3, blue: 0.3))
+
+                Spacer()
+
+                Text("READONLY")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.7))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.green.opacity(0.3), lineWidth: 1)
+                    )
+            }
+        }
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.red.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.red.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 10)
+    }
+}
+
+// ============================================================
+// MARK: - SETTINGS PANEL (feature toggles + colors)
+// ============================================================
+struct SettingsPanel: View {
+    @ObservedObject var hackState = HackState.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Section header
+            HStack {
+                Text("FEATURES")
+                    .font(.system(size: 11, weight: .heavy, design: .monospaced))
+                    .tracking(1)
+                    .foregroundColor(Color(red: 0.72, green: 0.44, blue: 0.44))
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            // Toggle rows
+            ESPToggleRow(title: "Box ESP", icon: "square.dashed", isOn: $hackState.showBoxESP)
+            ESPToggleRow(title: "Health Bar", icon: "heart.fill", isOn: $hackState.showHealthBar)
+            ESPToggleRow(title: "Distance", icon: "ruler.fill", isOn: $hackState.showDistance)
+            ESPToggleRow(title: "Player Names", icon: "textformat", isOn: $hackState.showNames)
+            ESPToggleRow(title: "Level", icon: "chart.bar.fill", isOn: $hackState.showLevel)
+
+            Divider()
+                .background(Color.red.opacity(0.1))
+                .padding(.vertical, 10)
+
+            // Color pickers
+            ESPColorRow(title: "Enemy Color", color: $hackState.enemyColor)
+            ESPColorRow(title: "Ally Color", color: $hackState.allyColor)
+
+            // Box thickness
+            VStack(spacing: 8) {
+                HStack {
+                    Text("Box Thickness")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(Color(red: 0.72, green: 0.44, blue: 0.44))
+                    Spacer()
+                    Text(String(format: "%.1f", hackState.boxThickness))
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(Color(red: 1, green: 0.3, blue: 0.3))
+                }
+
+                Slider(
+                    value: $hackState.boxThickness,
+                    in: 0.5...4.0,
+                    step: 0.5
+                ) {
+                    $0.tintColor = Color(red: 1, green: 0.3, blue: 0.3)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .padding(.bottom, 14)
+        }
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.red.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.red.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 10)
+    }
+}
+
+// MARK: - Toggle Row
+struct ESPToggleRow: View {
+    let title: String
+    let icon: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(isOn ? Color(red: 1, green: 0.3, blue: 0.3) : Color(red: 0.5, green: 0.3, blue: 0.3))
+                .font(.system(size: 14))
+                .frame(width: 24)
+
+            Text(title)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(isOn ? .white : Color(red: 0.72, green: 0.44, blue: 0.44))
+
+            Spacer()
+
+            Toggle("", isOn: $isOn)
+                .toggleStyle(SwitchToggleStyle(tint: Color(red: 1, green: 0.3, blue: 0.3)))
+                .labelsHidden()
+                .scaleEffect(0.75)
+                .frame(width: 50)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+    }
+}
+
+// MARK: - Color Row
+struct ESPColorRow: View {
+    let title: String
+    @Binding var color: UIColor
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(Color(red: 0.72, green: 0.44, blue: 0.44))
+
+            Spacer()
+
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color(color))
+                .frame(width: 28, height: 16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                )
+
+            HStack(spacing: 5) {
+                ForEach(ColorPreset.allCases, id: \.self) { preset in
+                    Button(action: {
+                        color = preset.color
+                    }) {
+                        Circle()
+                            .fill(preset.swiftUIColor)
+                            .frame(width: 18, height: 18)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+    }
+}
+
+// MARK: - Color Presets
+enum ColorPreset: CaseIterable {
+    case red, green, blue, yellow, purple, cyan, white, pink
+
+    var color: UIColor {
+        switch self {
+        case .red:    return UIColor(red: 1.0, green: 0.25, blue: 0.25, alpha: 0.9)
+        case .green:  return UIColor(red: 0.25, green: 1.0, blue: 0.25, alpha: 0.9)
+        case .blue:   return UIColor(red: 0.25, green: 0.5, blue: 1.0, alpha: 0.9)
+        case .yellow: return UIColor(red: 1.0, green: 0.9, blue: 0.2, alpha: 0.9)
+        case .purple: return UIColor(red: 0.7, green: 0.3, blue: 1.0, alpha: 0.9)
+        case .cyan:   return UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 0.9)
+        case .white:  return UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.9)
+        case .pink:   return UIColor(red: 1.0, green: 0.4, blue: 0.8, alpha: 0.9)
+        }
+    }
+
+    var swiftUIColor: Color {
+        Color(color)
+    }
+}
+
 // MARK: - Preview Carousel
 struct PreviewCarousel: View {
     var body: some View {
@@ -462,34 +735,63 @@ struct InfoCard: View {
     }
 }
 
-// MARK: - Start Button
+// MARK: - Start Button (now switches between START/STOP)
 struct StartButton: View {
+    let isConnected: Bool
+    let isTransitioning: Bool
     let action: () -> Void
     @State private var glow = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Text("START HACK")
-                    .font(.system(size: 20, weight: .heavy))
-                    .tracking(1)
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 22))
-                    .opacity(glow ? 1 : 0.7)
+                if isTransitioning {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.9)
+                } else {
+                    Text(isConnected ? "STOP HACK" : "START HACK")
+                        .font(.system(size: 20, weight: .heavy))
+                        .tracking(1)
+                    Image(systemName: isConnected ? "stop.fill" : "bolt.fill")
+                        .font(.system(size: 22))
+                        .opacity(glow ? 1 : 0.7)
+                }
             }
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .frame(height: 64)
             .background(
-                LinearGradient(gradient: Gradient(colors: [
-                    Color(red: 1, green: 0.1, blue: 0.1),
-                    Color(red: 1, green: 0.3, blue: 0.3),
-                    Color(red: 1, green: 0.1, blue: 0.1)]),
-                    startPoint: .leading, endPoint: .trailing)
+                LinearGradient(
+                    gradient: Gradient(colors: isConnected
+                        ? [Color(red: 0.3, green: 0.1, blue: 0.1),
+                           Color(red: 0.5, green: 0.15, blue: 0.15),
+                           Color(red: 0.3, green: 0.1, blue: 0.1)]
+                        : [Color(red: 1, green: 0.1, blue: 0.1),
+                           Color(red: 1, green: 0.3, blue: 0.3),
+                           Color(red: 1, green: 0.1, blue: 0.1)]),
+                    startPoint: .leading, endPoint: .trailing
+                )
             )
             .cornerRadius(16)
-            .shadow(color: .red.opacity(glow ? 0.6 : 0.35), radius: glow ? 25 : 12)
+            .shadow(
+                color: isConnected
+                    ? Color.gray.opacity(0.3)
+                    : Color.red.opacity(glow ? 0.6 : 0.35),
+                radius: glow || isConnected ? 0 : 12
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(
+                        isConnected
+                            ? Color.red.opacity(0.3)
+                            : Color.red.opacity(0.5),
+                        lineWidth: 1
+                    )
+            )
         }
+        .disabled(isTransitioning)
+        .opacity(isTransitioning ? 0.6 : 1.0)
         .onAppear {
             withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) { glow = true }
         }
@@ -498,16 +800,18 @@ struct StartButton: View {
 }
 
 // ============================================================
-// MARK: - LOADING SCREEN (after START HACK pressed)
+// MARK: - REAL LOADING SCREEN (actually connects to MLBB)
 // ============================================================
-struct LoadingView: View {
+struct RealLoadingView: View {
     @Binding var showLoading: Bool
+    @ObservedObject var hackState: HackState
+    
     @State private var progress: Double = 0
     @State private var spin = false
     @State private var done = false
+    @State private var failed = false
     @State private var statusText = "Connecting to server..."
-
-    let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+    @State private var errorDetail = ""
 
     var body: some View {
         ZStack {
@@ -533,6 +837,21 @@ struct LoadingView: View {
                     }
                     .shadow(color: .green.opacity(0.6), radius: 25)
                     .transition(.scale.combined(with: .opacity))
+                } else if failed {
+                    // Failure X
+                    ZStack {
+                        Circle()
+                            .fill(Color.red.opacity(0.15))
+                            .frame(width: 150, height: 150)
+                        Circle()
+                            .stroke(Color.red, lineWidth: 4)
+                            .frame(width: 130, height: 130)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 55, weight: .heavy))
+                            .foregroundColor(.red)
+                    }
+                    .shadow(color: .red.opacity(0.6), radius: 25)
+                    .transition(.scale.combined(with: .opacity))
                 } else {
                     // Spinning ring + progress
                     ZStack {
@@ -551,7 +870,7 @@ struct LoadingView: View {
                             )
                             .frame(width: 150, height: 150)
                             .rotationEffect(.degrees(-90))
-                            .animation(.linear(duration: 0.05), value: progress)
+                            .animation(.linear(duration: 0.1), value: progress)
 
                         Circle()
                             .trim(from: 0, to: 0.25)
@@ -567,13 +886,33 @@ struct LoadingView: View {
                     .shadow(color: .red.opacity(0.4), radius: 15)
                 }
 
-                Text(done ? "INJECTION COMPLETE" : statusText)
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundColor(done ? .green : Color(red: 1, green: 0.35, blue: 0.35))
-                    .padding(.top, 35)
+                // Status text
+                Group {
+                    if done {
+                        Text("INJECTION COMPLETE")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundColor(.green)
+                    } else if failed {
+                        VStack(spacing: 6) {
+                            Text("CONNECTION FAILED")
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundColor(.red)
+                            Text(errorDetail)
+                                .font(.system(size: 13))
+                                .foregroundColor(Color(red: 0.79, green: 0.6, blue: 0.6))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 30)
+                        }
+                    } else {
+                        Text(statusText)
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundColor(Color(red: 1, green: 0.35, blue: 0.35))
+                    }
+                }
+                .padding(.top, 35)
 
                 // Progress bar
-                if !done {
+                if !done && !failed {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule()
@@ -584,16 +923,20 @@ struct LoadingView: View {
                                     Color(red: 1, green: 0.4, blue: 0.4)
                                 ]), startPoint: .leading, endPoint: .trailing))
                                 .frame(width: geo.size.width * progress)
-                                .animation(.linear(duration: 0.05), value: progress)
+                                .animation(.linear(duration: 0.1), value: progress)
                         }
                     }
                     .frame(width: 250, height: 8)
                     .padding(.top, 20)
                 }
 
-                // Close button (only when done)
+                // Action buttons
                 if done {
-                    Button(action: { showLoading = false }) {
+                    Button(action: {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            showLoading = false
+                        }
+                    }) {
                         Text("CLOSE")
                             .font(.system(size: 16, weight: .heavy))
                             .tracking(1)
@@ -610,32 +953,206 @@ struct LoadingView: View {
                     }
                     .padding(.top, 30)
                     .transition(.opacity)
+                } else if failed {
+                    Button(action: {
+                        hackState.resetState()
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            showLoading = false
+                        }
+                    }) {
+                        Text("RETRY")
+                            .font(.system(size: 16, weight: .heavy))
+                            .tracking(1)
+                            .foregroundColor(.white)
+                            .frame(width: 180, height: 50)
+                            .background(
+                                LinearGradient(gradient: Gradient(colors: [
+                                    Color(red: 1, green: 0.1, blue: 0.1),
+                                    Color(red: 1, green: 0.3, blue: 0.3)
+                                ]), startPoint: .leading, endPoint: .trailing)
+                            )
+                            .cornerRadius(14)
+                            .shadow(color: .red.opacity(0.4), radius: 15)
+                    }
+                    .padding(.top, 30)
+                    .transition(.opacity)
                 }
 
                 Spacer()
             }
         }
-        .onReceive(timer) { _ in
-            if progress < 1.0 {
-                progress = min(progress + Double.random(in: 0.008...0.02), 1.0)
-                statusText = statusMessage(for: progress)
-            } else if !done {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                    done = true
+        .onAppear {
+            spin = true
+            startRealConnection()
+        }
+    }
+
+    // MARK: - Real connection sequence
+    private func startRealConnection() {
+        let memoryManager = hackState.memoryManager
+
+        // Phase 1: Find MLBB process
+        setStatus("Finding MLBB process...", progress: 0.15)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            
+            guard let pid = ProcessFinder.findPID(byName: "MLBB")
+                    ?? ProcessFinder.findPID(byName: "MobileLegends")
+                    ?? ProcessFinder.findPID(byName: "mlbb") else {
+                DispatchQueue.main.async {
+                    fail("MLBB is not running. Open the game first, then try again.")
+                }
+                return
+            }
+
+            // Phase 2: Attach
+            DispatchQueue.main.async {
+                setStatus("Attaching to PID \(pid)...", progress: 0.35)
+            }
+
+            guard memoryManager.attach(to: pid) else {
+                DispatchQueue.main.async {
+                    fail("Cannot attach to MLBB. Make sure you're on TrollStore or Jailbroken with proper entitlements.")
+                }
+                return
+            }
+
+            // Phase 3: Find module base
+            DispatchQueue.main.async {
+                setStatus("Locating game module...", progress: 0.55)
+            }
+
+            guard let base = memoryManager.findModuleBase(named: "MLBB") else {
+                DispatchQueue.main.async {
+                    fail("Module base not found. MLBB might be running under a different binary name.")
+                }
+                return
+            }
+
+            // Phase 4: Parsing entities
+            DispatchQueue.main.async {
+                setStatus("Reading game memory...", progress: 0.75)
+            }
+
+            // Brief pause to let the UI catch up
+            Thread.sleep(forTimeInterval: 0.3)
+
+            // Phase 5: Spawn overlay
+            DispatchQueue.main.async {
+                setStatus("Attaching ESP modules...", progress: 0.9)
+            }
+
+            DispatchQueue.main.async {
+                // Create the overlay controller
+                hackState.mlbbPID = pid
+                hackState.baseAddress = base
+                hackState.spawnOverlay()
+
+                // Complete
+                setStatus("Finalizing...", progress: 1.0)
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                        done = true
+                    }
                 }
             }
         }
-        .onAppear { spin = true }
     }
 
-    private func statusMessage(for p: Double) -> String {
-        switch p {
-        case 0..<0.2:  return "Connecting to server..."
-        case 0.2..<0.4: return "Bypassing anti-cheat..."
-        case 0.4..<0.6: return "Reading game memory..."
-        case 0.6..<0.85: return "Attaching ESP modules..."
-        case 0.85..<1.0: return "Finalizing injection..."
-        default: return "Injection complete!"
+    private func setStatus(_ text: String, progress p: Double) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            statusText = text
+            progress = p
         }
+    }
+
+    private func fail(_ detail: String) {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+            failed = true
+            errorDetail = detail
+        }
+    }
+}
+
+// ============================================================
+// MARK: - HACK STATE (Core state manager — ObservableObject)
+// ============================================================
+class HackState: ObservableObject {
+    static let shared = HackState()
+
+    let version = "0.1"
+
+    // Connection state
+    @Published var isConnected = false
+    @Published var isTransitioning = false
+    @Published var statusText = "Not Connected"
+    @Published var mlbbPID: Int32 = 0
+    @Published var baseAddress: UInt64 = 0
+    @Published var currentFPS: Int = 0
+    @Published var entityCount: Int = 0
+
+    // ESP feature toggles
+    @Published var showBoxESP = true
+    @Published var showHealthBar = true
+    @Published var showDistance = true
+    @Published var showNames = false
+    @Published var showLevel = true
+    @Published var showHealthText = false
+
+    // ESP appearance
+    @Published var enemyColor = UIColor(red: 1.0, green: 0.25, blue: 0.25, alpha: 0.9)
+    @Published var allyColor = UIColor(red: 0.25, green: 1.0, blue: 0.25, alpha: 0.9)
+    @Published var boxThickness: Double = 1.5
+    @Published var boxGlow: Double = 4.0
+
+    // Core objects
+    let memoryManager = MemoryManager()
+    private var overlayController: OverlayController?
+
+    // MARK: - Spawn overlay (called after successful connection)
+    func spawnOverlay() {
+        overlayController = OverlayController(
+            memoryManager: memoryManager,
+            baseAddress: baseAddress,
+            settings: self
+        )
+        overlayController?.start()
+        isConnected = true
+        statusText = "Connected"
+    }
+
+    // MARK: - Stop
+    func stopHack() {
+        guard isConnected else { return }
+        isTransitioning = true
+
+        overlayController?.stop()
+        overlayController = nil
+        memoryManager.detach()
+
+        withAnimation(.easeInOut(duration: 0.3)) {
+            isConnected = false
+            isTransitioning = false
+            statusText = "Not Connected"
+            mlbbPID = 0
+            baseAddress = 0
+            entityCount = 0
+            currentFPS = 0
+        }
+    }
+
+    // MARK: - Reset (called on retry)
+    func resetState() {
+        overlayController?.stop()
+        overlayController = nil
+        memoryManager.detach()
+        isConnected = false
+        isTransitioning = false
+        mlbbPID = 0
+        baseAddress = 0
+        entityCount = 0
+        currentFPS = 0
+        statusText = "Not Connected"
     }
 }
