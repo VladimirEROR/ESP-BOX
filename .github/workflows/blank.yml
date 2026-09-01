@@ -13,6 +13,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check source files exist
+        run: |
+          echo "=== Repo root ==="
+          ls -la
+          echo "=== ESP-BOX folder ==="
+          ls -la ESP-BOX/ || { echo "::error::ESP-BOX folder not found!"; exit 1; }
+          SWIFT_COUNT=$(find ESP-BOX -name "*.swift" | wc -l | xargs)
+          echo "Swift files found: $SWIFT_COUNT"
+          if [ "$SWIFT_COUNT" -eq "0" ]; then
+            echo "::error::NO SWIFT FILES! Add ContentView.swift and ESP_BOXApp.swift to ESP-BOX folder"
+            exit 1
+          fi
+
       - name: Select newest Xcode
         run: |
           XCODE_APP=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
