@@ -1,16 +1,38 @@
 import Foundation
 import Darwin
 
+// MARK: - Mach VM function declarations (not in public iOS SDK headers)
+// These exist in libSystem.dylib on iOS but aren't publicly declared
+
+@_silgen_name("mach_vm_read_overwrite")
+internal func _mach_vm_read_overwrite(
+    _ target_task: mach_port_t,
+    _ address: UInt64,
+    _ size: UInt64,
+    _ data: UInt64,
+    _ outsize: UnsafeMutablePointer<UInt64>
+) -> kern_return_t
+
+@_silgen_name("mach_vm_region_recurse")
+internal func _mach_vm_region_recurse(
+    _ target_task: mach_port_t,
+    _ address: UnsafeMutablePointer<UInt64>,
+    _ size: UnsafeMutablePointer<UInt64>,
+    _ object_name: UnsafeMutablePointer<mach_port_t>,
+    _ info: UnsafeMutableRawPointer,
+    _ infoCnt: UnsafeMutablePointer<UInt32>
+) -> kern_return_t
+
 // MARK: - Memory Manager (External Read — READONLY)
 class MemoryManager {
     
-    private var taskPort: mach_port_t = MACH_PORT_NULL
+    private var taskPort: mach_port_t = 0
     private var targetPID: Int32 = 0
     private var moduleBase: UInt64 = 0
     private var moduleSize: UInt64 = 0
     
     var isAttached: Bool {
-        return taskPort != MACH_PORT_NULL
+        return taskPort != 0
     }
     
     var baseAddress: UInt64 {
@@ -20,13 +42,12 @@ class MemoryManager {
     // MARK: - Attach
     func attach(to pid: Int32) -> Bool {
         targetPID = pid
-        taskPort = MACH_PORT_NULL
+        taskPort = 0
         
         let kr = task_for_pid(mach_task_self_, pid, &taskPort)
         
-        guard kr == KERN_SUCCESS else {
+        guard kr == KERN_SUCCESS, taskPort != 0 else {
             print("[VEX] task_for_pid failed with error: \(kr)")
-            print("[VEX] — need JB or TrollStore with entitlements")
             return false
         }
         
@@ -35,9 +56,9 @@ class MemoryManager {
     }
     
     func detach() {
-        if taskPort != MACH_PORT_NULL {
+        if taskPort != 0 {
             mach_port_deallocate(mach_task_self_, taskPort)
-            taskPort = MACH_PORT_NULL
+            taskPort = 0
         }
         moduleBase = 0
         moduleSize = 0
@@ -47,46 +68,90 @@ class MemoryManager {
     func findModuleBase(named moduleName: String) -> UInt64? {
         guard isAttached else { return nil }
         
-        var address: mach_vm_address_t = 0
-        var count: mach_vm_size_t = 0
-        var objectName: mach_vm_offset_t = 0
+        var address: UInt64 = 0
+        var size: UInt64 = 0
+        var objectName: mach_port_t = 0
         
-        var info = vm_region_submap_info_data_64_t()
-        var infoCount: mach_msg_type_number_t = 
-            mach_msg_type_number_t(MemoryLayout.size(ofValue: info) / MemoryLayout<integer_t>.size)
+        // vm_region_submap_info_data_64 structure is 152 bytes
+        // we'll use a raw buffer to avoid struct layout issues
+        let infoSize = 152
+        var infoBuffer = [UInt8](repeating: 0, count: infoSize)
+        var infoCount: UInt32 = UInt32(infoSize / MemoryLayout<integer_t>.size)
         
         var largestExec: (UInt64, UInt64) = (0, 0)
         
         while true {
-            let kr = mach_vm_region_recurse(
+            // protection field is at offset 40 in vm_region_submap_info_data_64
+            // share_mode at offset 56
+            // we only need protection (offset 40, 4 bytes) and is_submap (offset 152-4)
+            
+            let kr = _mach_vm_region_recurse(
                 taskPort,
                 &address,
-                &count,
+                &size,
                 &objectName,
-                &info
+                &infoBuffer,
+                &infoCount
             )
             
             if kr != KERN_SUCCESS { break }
             
-            let regionSize = UInt64(count)
-            let isExecutable = (info.protection & VM_PROT_EXECUTE) != 0
+            // Extract protection from the info buffer
+            // vm_region_submap_info_data_64 layout:
+            //   offset 0-27: vm_region_basic_info_data_64 (28 bytes)
+            //   offset 28: protection (4 bytes)
+            //   offset 32: max_protection (4 bytes)
+            //   ... etc
+            // Actually let me recalculate:
+            // vm_region_submap_info_data_64:
+            //   0-3: protection
+            //   4-7: max_protection  
+            //   8-11: inheritance
+            //   12-15: reserved (was shared)
+            //   16-23: offset (8 bytes)
+            //   24-27: user_tag
+            //   28-31: pages_resident
+            //   32-35: pages_shared_now_private
+            //   36-39: pages_swapped_out
+            //   40-43: pages_dirtied
+            //   44-47: ref_count
+            //   48-51: shadow_depth
+            //   52-55: external_pager
+            //   56-59: share_mode
+            //   60-63: is_submap (boolean)
+            //   64-...: behavior
             
-            if isExecutable && regionSize > largestExec.1 {
-                largestExec = (address, regionSize)
+            // protection is at offset 0
+            let protection = infoBuffer.withUnsafeBytes { raw in
+                raw.load(fromByteOffset: 0, as: Int32.self)
             }
             
-            if info.is_submap != 0 {
-                // Recurse into submap
-                address += regionSize
+            // share_mode at offset 56
+            let shareMode = infoBuffer.withUnsafeBytes { raw in
+                raw.load(fromByteOffset: 56, as: Int32.self)
+            }
+            
+            // is_submap at offset 60 (1 byte bool)
+            let isSubmap = infoBuffer[60] != 0
+            
+            let isExecutable = (protection & VM_PROT_EXECUTE) != 0
+            
+            if isExecutable && size > largestExec.1 {
+                largestExec = (address, size)
+            }
+            
+            _ = shareMode
+            
+            if isSubmap {
+                // skip submaps, just advance
+                address += size
             } else {
-                address += regionSize
+                address += size
             }
             
             if address > 0x80000000000 { break }
         }
         
-        // MLBB is a monolithic game binary — the largest executable
-        // region is the main binary
         if largestExec.1 > 0x1000000 {
             moduleBase = largestExec.0
             moduleSize = largestExec.1
@@ -110,17 +175,17 @@ class MemoryManager {
         )
         defer { buffer.deallocate() }
         
-        var bytesRead: mach_vm_size_t = 0
+        var bytesRead: UInt64 = 0
         
-        let kr = mach_vm_read_overwrite(
+        let kr = _mach_vm_read_overwrite(
             taskPort,
-            mach_vm_address_t(address),
-            mach_vm_size_t(size),
-            mach_vm_address_t(UInt(bitPattern: buffer)),
+            address,
+            UInt64(size),
+            UInt64(UInt(bitPattern: buffer)),
             &bytesRead
         )
         
-        guard kr == KERN_SUCCESS, bytesRead >= mach_vm_size_t(size) else {
+        guard kr == KERN_SUCCESS, bytesRead >= UInt64(size) else {
             return nil
         }
         
@@ -143,17 +208,17 @@ class MemoryManager {
         )
         defer { buffer.deallocate() }
         
-        var bytesRead: mach_vm_size_t = 0
+        var bytesRead: UInt64 = 0
         
-        let kr = mach_vm_read_overwrite(
+        let kr = _mach_vm_read_overwrite(
             taskPort,
-            mach_vm_address_t(address),
-            mach_vm_size_t(size),
-            mach_vm_address_t(UInt(bitPattern: buffer)),
+            address,
+            UInt64(size),
+            UInt64(UInt(bitPattern: buffer)),
             &bytesRead
         )
         
-        guard kr == KERN_SUCCESS, bytesRead >= mach_vm_size_t(size) else {
+        guard kr == KERN_SUCCESS, bytesRead >= UInt64(size) else {
             return nil
         }
         
