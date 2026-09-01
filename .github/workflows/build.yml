@@ -13,15 +13,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
+      - name: Disable line ending conversion
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+      
       - name: Install ldid
         run: |
-          brew install ldid
+          brew install ldid || true
           which ldid
       
       - name: Build IPA
         run: |
-          chmod +x build.sh
-          ./build.sh
+          dos2unix build.sh || true
+          bash build.sh
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4
