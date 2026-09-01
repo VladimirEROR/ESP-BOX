@@ -4,9 +4,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
+    <string>$(AppTEST)</string>
     <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <string>$(com.test.com)</string>
     <key>CFBundleName</key>
     <string>ESP-BOX</string>
     <key>CFBundleDisplayName</key>
