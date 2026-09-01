@@ -26,17 +26,18 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build app (unsigned, iphoneos)
+      - name: Build app (ad-hoc signed)
         run: |
           xcodebuild build \
-            -project ESP-BOX.xcodeproj \
-            -scheme ESP-BOX \
+            -project ElXDa.xcodeproj \
+            -scheme ElXDa \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Verify binary exists & Package IPA
         run: |
@@ -55,10 +56,10 @@ jobs:
           echo "Binary OK — packaging IPA..."
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
-          zip -r ESP-BOX.ipa Payload
+          zip -r ElXDa.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ESP-BOX-IPA
-          path: ESP-BOX.ipa
+          name: ElXDa-IPA
+          path: ElXDa.ipa
