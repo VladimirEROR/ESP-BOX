@@ -7,17 +7,28 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          ls /Applications/ | grep Xcode
+          XCODE_APP=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Using $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate
+
+      - name: Fix project format (safety)
+        run: sed -i '' 's/objectVersion = 77/objectVersion = 56/' ESP-BOX.xcodeproj/project.pbxproj || true
 
       - name: Archive app (unsigned)
         run: |
