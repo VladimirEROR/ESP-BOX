@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
-
+git add Sources/ContentView.swift
+git commit -m "fix: search for 'legends' binary name"
+git push
 APP_NAME="ESP-BOX"
 
 echo "============================================"
