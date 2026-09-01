@@ -1,25 +1,19 @@
 #!/bin/bash
-set -e
-git add Sources/ContentView.swift
-git commit -m "fix: search for 'legends' binary name"
-git push
+
 APP_NAME="ESP-BOX"
 
 echo "============================================"
 echo "  ESP-BOX iOS Build"
 echo "============================================"
 
-# Get iOS SDK path
 SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
 echo "[*] SDK Path: $SDK_PATH"
 
-# Verify SDK exists
 if [ ! -d "$SDK_PATH" ]; then
     echo "[!] iOS SDK not found!"
     exit 1
 fi
 
-# Collect all Swift source files
 SWIFT_FILES=(
     "Sources/ESP_BOXApp.swift"
     "Sources/ContentView.swift"
@@ -31,7 +25,6 @@ SWIFT_FILES=(
     "Sources/Overlay/ESPRenderer.swift"
 )
 
-# Verify all files exist
 for f in "${SWIFT_FILES[@]}"; do
     if [ ! -f "$f" ]; then
         echo "[!] Missing file: $f"
@@ -41,8 +34,8 @@ done
 
 echo "[*] Found ${#SWIFT_FILES[@]} Swift files"
 
-# Compile for arm64 iOS
 echo "[*] Compiling..."
+
 swiftc \
     -target arm64-apple-ios15.0 \
     -sdk "$SDK_PATH" \
@@ -59,11 +52,8 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "[*] Compilation successful"
-
-# Verify binary
 file "$APP_NAME"
 
-# Create .app bundle
 echo "[*] Creating app bundle..."
 APP_DIR="${APP_NAME}.app"
 rm -rf "$APP_DIR"
@@ -72,7 +62,6 @@ mkdir -p "$APP_DIR"
 cp "$APP_NAME" "$APP_DIR/"
 cp Config/Info.plist "$APP_DIR/"
 
-# Sign with entitlements using ldid
 echo "[*] Signing with entitlements..."
 ldid -S Config/ESP_BOX.entitlements "$APP_DIR/$APP_NAME"
 
@@ -81,11 +70,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Verify signature
 echo "[*] Verifying signature..."
 ldid -e "$APP_DIR/$APP_NAME"
 
-# Package as IPA
 echo "[*] Packaging IPA..."
 rm -rf Payload "${APP_NAME}.ipa"
 mkdir Payload
