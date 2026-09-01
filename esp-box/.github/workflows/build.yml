@@ -1,0 +1,31 @@
+name: Build ESP-BOX IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Install ldid
+        run: |
+          brew install ldid
+          which ldid
+      
+      - name: Build IPA
+        run: |
+          chmod +x build.sh
+          ./build.sh
+      
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ESP-BOX-IPA
+          path: ESP-BOX.ipa
+          retention-days: 30
