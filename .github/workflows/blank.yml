@@ -1,78 +1,31 @@
-name: Build IPA
+name: Build ESP-BOX IPA
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-15
-
+    runs-on: macos-14
+    
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Check source files exist
+      
+      - name: Install ldid
         run: |
-          echo "=== Repo root ==="
-          ls -la
-          echo "=== ESP-BOX folder ==="
-          ls -la ESP-BOX/ || { echo "::error::ESP-BOX folder not found!"; exit 1; }
-          SWIFT_COUNT=$(find ESP-BOX -name "*.swift" | wc -l | xargs)
-          echo "Swift files found: $SWIFT_COUNT"
-          if [ "$SWIFT_COUNT" -eq "0" ]; then
-            echo "::error::NO SWIFT FILES! Add ContentView.swift and ESP_BOXApp.swift to ESP-BOX folder"
-            exit 1
-          fi
-
-      - name: Select newest Xcode
+          brew install ldid
+          which ldid
+      
+      - name: Build IPA
         run: |
-          XCODE_APP=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
-          echo "Using $XCODE_APP"
-          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
-          xcodebuild -version
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        run: xcodegen generate
-
-      - name: Build app (ad-hoc signed)
-        run: |
-          xcodebuild build \
-            -project ElXDa.xcodeproj \
-            -scheme ElXDa \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=YES \
-            CODE_SIGNING_ALLOWED=YES \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
-
-      - name: Verify binary exists & Package IPA
-        run: |
-          APP_PATH=$(find build -name "*.app" -type d | head -1)
-          echo "App found at: $APP_PATH"
-          ls -la "$APP_PATH"
-
-          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")
-          echo "Main binary is: $EXEC_NAME"
-
-          if [ ! -f "$APP_PATH/$EXEC_NAME" ]; then
-            echo "ERROR: Main binary is missing! Aborting."
-            exit 1
-          fi
-
-          echo "Binary OK — packaging IPA..."
-          mkdir -p Payload
-          cp -r "$APP_PATH" Payload/
-          zip -r ElXDa.ipa Payload
-
+          chmod +x build.sh
+          ./build.sh
+      
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ElXDa-IPA
-          path: ElXDa.ipa
+          name: ESP-BOX-IPA
+          path: ESP-BOX.ipa
+          retention-days: 30
