@@ -986,9 +986,9 @@ struct RealLoadingView: View {
 
         DispatchQueue.global(qos: .userInitiated).async {
 
-            guard let pid = ProcessFinder.findPID(byName: "MLBB")
-                    ?? ProcessFinder.findPID(byName: "MobileLegends")
-                    ?? ProcessFinder.findPID(byName: "mlbb") else {
+           guard let pid = ProcessFinder.findPID(byName: "legends")
+        ?? ProcessFinder.findPID(byName: "MLBB")
+        ?? ProcessFinder.findPID(byName: "MobileLegends") else {
                 DispatchQueue.main.async {
                     fail("MLBB is not running. Open the game and get into a match first, then try again.")
                 }
