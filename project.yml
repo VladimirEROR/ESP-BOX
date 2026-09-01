@@ -1,17 +1,17 @@
-name: ESP-BOX
+name: ElXDa
 options:
   bundleIdPrefix: com.vladimir
   deploymentTarget:
     iOS: "15.0"
 targets:
-  ESP-BOX:
+  ElXDa:
     type: application
     platform: iOS
     sources:
       - path: ESP-BOX
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vladimir.espbox
+        PRODUCT_BUNDLE_IDENTIFIER: com.vladimir.esp
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
