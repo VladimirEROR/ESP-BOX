@@ -198,7 +198,7 @@ struct MainView: View {
                     if hackState.isConnected {
                         LiveStatusCard()
                             .padding(.top, 20)
-                            .transition(.opacity.combined(with: .move(from: .edge)))
+                            .transition(.opacity.combined(with: .move(edge: .top)))
 
                         SettingsPanel()
                             .padding(.top, 16)
