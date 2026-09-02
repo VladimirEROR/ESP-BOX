@@ -37,10 +37,13 @@ class OverlayController: NSObject {
     private var audioPlayer: AVAudioPlayer?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
     
-    // PIP overlay
+    // PIP
     private var pipController: AVPictureInPictureController?
-    private var displayLayer: AVSampleBufferDisplayLayer?
     private var pipView: UIView?
+    
+    // AVPlayer for PIP
+    private var player: AVPlayer?
+    private var playerLayer: AVPlayerLayer?
     
     // Fallback window
     private var fallbackWindow: UIWindow?
@@ -89,49 +92,18 @@ class OverlayController: NSObject {
         }
     }
     
-    // MARK: - Setup PIP Layer
+    // MARK: - Setup PIP
     private func setupPIPLayer() {
-        let layer = AVSampleBufferDisplayLayer()
-        layer.frame = CGRect(x: 0, y: 0, width: 300, height: 150)
-        layer.videoGravity = .resizeAspect
-        
-        // Hidden host view for the layer
-        let hostView = UIView(frame: CGRect(x: -1000, y: -1000, width: 300, height: 150))
-        hostView.layer.addSublayer(layer)
-        
-        // Add to a window so it has a rendering context
-        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
-           let window = scene.windows.first {
-            window.addSubview(hostView)
-        }
-        
-        displayLayer = layer
-        pipView = hostView
-        
         if AVPictureInPictureController.isPictureInPictureSupported() {
-            // iOS 15+ — use the initializer with content source
-            if #available(iOS 15.0, *) {
-                let sampleBufferPlaybackCoordinator = AVSampleBufferPlaybackCoordinator()
-                // Not available — we need AVPlayerLayer approach
-                
-                // PIP with AVSampleBufferDisplayLayer isn't directly supported on iOS
-                // We need to use AVPlayerLayer instead
-                setupWithAVPlayer()
-                return
-            }
+            setupWithAVPlayer()
         } else {
             print("[VEX] PIP not supported — using window fallback")
             setupFallbackWindow()
         }
     }
     
-    // MARK: - PIP with AVPlayerLayer (the correct way)
-    private var player: AVPlayer?
-    private var playerLayer: AVPlayerLayer?
-    private var videoOutput: AVPlayerItemVideoOutput?
-    
+    // MARK: - PIP with AVPlayerLayer
     private func setupWithAVPlayer() {
-        // Create a blank video item
         let videoUrl = generateBlankVideo()
         
         guard let url = videoUrl else {
@@ -149,12 +121,10 @@ class OverlayController: NSObject {
         
         player = avPlayer
         
-        // Create player layer
         let layer = AVPlayerLayer(player: avPlayer)
         layer.frame = CGRect(x: 0, y: 0, width: 300, height: 150)
         layer.videoGravity = .resizeAspect
         
-        // Hidden host view
         let hostView = UIView(frame: CGRect(x: -1000, y: -1000, width: 300, height: 150))
         hostView.layer.addSublayer(layer)
         
@@ -176,9 +146,8 @@ class OverlayController: NSObject {
             self?.player?.play()
         }
         
-        // Create PIP controller with the player layer
-        if #available(iOS 15.0, *) {
-            let pip = AVPictureInPictureController(playerLayer: layer)
+        // Create PIP controller
+        if let pip = AVPictureInPictureController(playerLayer: layer) {
             pip.delegate = self
             pipController = pip
             
@@ -187,13 +156,14 @@ class OverlayController: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.startPIP()
             }
+        } else {
+            print("[VEX] PIP controller creation failed — using fallback")
+            setupFallbackWindow()
         }
     }
     
     // MARK: - Generate a tiny blank video for PIP
     private func generateBlankVideo() -> URL? {
-        // Write a minimal MP4 file — just a black frame
-        // We use AVAssetWriter for this
         let outputURL = URL(fileURLWithPath: NSTemporaryDirectory() + "blank.mp4")
         
         try? FileManager.default.removeItem(at: outputURL)
@@ -212,9 +182,7 @@ class OverlayController: NSObject {
             AVVideoHeightKey: height
         ]
         
-        guard let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings) else {
-            return nil
-        }
+        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
@@ -229,7 +197,6 @@ class OverlayController: NSObject {
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
         
-        // Write 30 frames (3 seconds at 10fps)
         for frame in 0..<30 {
             while !writerInput.isReadyForMoreMediaData {
                 Thread.sleep(forTimeInterval: 0.01)
@@ -253,7 +220,6 @@ class OverlayController: NSObject {
             
             guard let buffer = pixelBuffer else { continue }
             
-            // Draw a dark red frame
             CVPixelBufferLockBaseAddress(buffer, [])
             if let context = CGContext(
                 data: CVPixelBufferGetBaseAddress(buffer),
@@ -267,14 +233,13 @@ class OverlayController: NSObject {
                 context.setFillColor(UIColor(red: 0.08, green: 0.02, blue: 0.02, alpha: 1.0).cgColor)
                 context.fill(CGRect(x: 0, y: 0, width: width, height: height))
                 
-                // ESP-BOX text
                 UIGraphicsPushContext(context)
                 let font = UIFont.systemFont(ofSize: 24, weight: .black)
-                let attrs: [NSAttributedString.Key: Any] = [
+                let textAttrs: [NSAttributedString.Key: Any] = [
                     .font: font,
                     .foregroundColor: UIColor(red: 1, green: 0.3, blue: 0.3, alpha: 1.0)
                 ]
-                NSAttributedString(string: "ESP-BOX", attributes: attrs)
+                NSAttributedString(string: "ESP-BOX", attributes: textAttrs)
                     .draw(at: CGPoint(x: 80, y: 60))
                 UIGraphicsPopContext()
             }
@@ -285,21 +250,15 @@ class OverlayController: NSObject {
         }
         
         writerInput.markAsFinished()
-        writer.finishWriting {
-            print("[VEX] Blank video generated: \(outputURL)")
-        }
         
-        // Wait for writing to complete
         let semaphore = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            while writer.status == .writing {
-                Thread.sleep(forTimeInterval: 0.05)
-            }
+        writer.finishWriting {
             semaphore.signal()
         }
         semaphore.wait()
         
         if writer.status == .completed {
+            print("[VEX] Blank video generated: \(outputURL)")
             return outputURL
         }
         
@@ -333,7 +292,6 @@ class OverlayController: NSObject {
         player = nil
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
-        displayLayer = nil
         pipView?.removeFromSuperview()
         pipView = nil
     }
@@ -465,13 +423,9 @@ class OverlayController: NSObject {
     @objc private func renderFrame() {
         guard isRunning else { return }
         
-        // If fallback view exists, render there
         if let view = fallbackView {
             renderToView(view)
         }
-        // If PIP is active, the video loops automatically
-        // (we can't draw into PIP live — it plays a video)
-        // For live updates we rely on the fallback window while in foreground
     }
     
     private func renderToView(_ view: ESPOverlayView) {
