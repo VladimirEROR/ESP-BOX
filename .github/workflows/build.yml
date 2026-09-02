@@ -13,20 +13,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Disable line ending conversion
-        run: |
-          git config --global core.autocrlf false
-          git config --global core.filemode false
-      
       - name: Install ldid
         run: |
           brew install ldid || true
           which ldid
       
-      - name: Build IPA
+      - name: Compile Swift
         run: |
-          dos2unix build.sh || true
-          bash build.sh
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK_PATH"
+          
+          swiftc \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_PATH" \
+            -o ESP-BOX \
+            -parse-as-library \
+            -emit-executable \
+            -O \
+            -swift-version 5 \
+            Sources/ESP_BOXApp.swift \
+            Sources/ContentView.swift \
+            Sources/Core/ProcessFinder.swift \
+            Sources/Core/MemoryManager.swift \
+            Sources/Core/MLBBOffsets.swift \
+            Sources/Core/EntityParser.swift \
+            Sources/Overlay/OverlayWindow.swift \
+            Sources/Overlay/ESPRenderer.swift
+      
+      - name: Package & Sign
+        run: |
+          mkdir -p ESP-BOX.app
+          cp ESP-BOX ESP-BOX.app/
+          cp Config/Info.plist ESP-BOX.app/
+          
+          ldid -S Config/ESP_BOX.entitlements ESP-BOX.app/ESP-BOX
+          
+          mkdir Payload
+          cp -r ESP-BOX.app Payload/
+          zip -r ESP-BOX.ipa Payload
+          rm -rf Payload
       
       - name: Upload IPA
         uses: actions/upload-artifact@v4
