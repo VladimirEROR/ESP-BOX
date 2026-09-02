@@ -35,34 +35,19 @@ jobs:
             Sources/Overlay/OverlayWindow.swift \
             Sources/Overlay/ESPRenderer.swift
       
-      - name: Package & Sign
+      - name: Package IPA (unsigned)
         run: |
-          # Download working ldid from Procursus repo
-          curl -L -o ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_macosx_arm64
-          chmod +x ldid
-          
-          # Verify it runs
-          ./ldid --version || echo "ldid version check"
-          
-          # Strip swift metadata that breaks some signers
-          strip ESP-BOX
-          
-          # Create app bundle
           mkdir -p ESP-BOX.app
           cp ESP-BOX ESP-BOX.app/
           cp Config/Info.plist ESP-BOX.app/
           
-          # Sign with entitlements
-          ./ldid -S Config/ESP_BOX.entitlements ESP-BOX.app/ESP-BOX
-          
-          # Package IPA
           mkdir Payload
           cp -r ESP-BOX.app Payload/
           zip -r ESP-BOX.ipa Payload
           rm -rf Payload
       
       - name: Upload IPA
-        exists: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: ESP-BOX-IPA
           path: ESP-BOX.ipa
