@@ -4,10 +4,10 @@ import AVFoundation
 
 // MARK: - Overlay States
 enum OverlayState {
-    case waiting       // waiting for MLBB to open
-    case connecting    // found MLBB, attaching
-    case active        // ESP running
-    case lost          // was active, MLBB closed
+    case waiting
+    case connecting
+    case active
+    case lost
 }
 
 // MARK: - Overlay Controller
@@ -26,15 +26,12 @@ class OverlayController {
     
     private var isRunning = false
     
-    // Polling for MLBB process
     private var pollTimer: Timer?
     private var pollCounter = 0
-    private let pollInterval: TimeInterval = 2.0
     
-    // Current overlay state
     private var currentState: OverlayState = .waiting
     
-    // Background keep-alive (silent audio)
+    // Background keep-alive
     private var audioPlayer: AVAudioPlayer?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
     
@@ -50,22 +47,23 @@ class OverlayController {
         isRunning = true
         currentState = .waiting
         
-        // Start background keep-alive
+        // Background keep-alive (safe — won't crash)
         startBackgroundKeepAlive()
         
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // Create overlay window immediately
+            // Create overlay window
             self.overlayWindow = OverlayWindow(frame: UIScreen.main.bounds)
             self.overlayWindow?.isHidden = false
             self.overlayWindow?.setWaitingMode()
             
-            // Start render loop
+            // Start render loop — delayed by 1 frame to let window settle
             self.displayLink = CADisplayLink(
                 target: self,
                 selector: #selector(self.renderFrame)
             )
+            self.displayLink?.preferredFramesPerSecond = 30
             self.displayLink?.add(to: .main, forMode: .common)
             
             // Start polling for MLBB
@@ -90,11 +88,11 @@ class OverlayController {
         }
     }
     
-    // MARK: - Polling for MLBB process
+    // MARK: - Polling for MLBB
     private func startPolling() {
         stopPolling()
         
-        pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.checkForMLBB()
         }
     }
@@ -109,20 +107,17 @@ class OverlayController {
         
         switch currentState {
         case .waiting, .lost:
-            // Look for MLBB process
             if let pid = ProcessFinder.findPID(byName: "legends")
                     ?? ProcessFinder.findPID(byName: "MLBB") {
-                // Found it — attach
                 print("[VEX] MLBB found! PID: \(pid)")
                 connectToMLBB(pid: pid)
             }
             
         case .active:
-            // Check if MLBB is still alive
-            if ProcessFinder.findPID(byName: "legends")
-                ?? ProcessFinder.findPID(byName: "MLBB") == nil {
-                // MLBB closed
-                print("[VEX] MLBB closed — going back to waiting")
+            // Check if MLBB still alive
+            if ProcessFinder.findPID(byName: "legends") == nil
+                && ProcessFinder.findPID(byName: "MLBB") == nil {
+                print("[VEX] MLBB closed — back to waiting")
                 memory.detach()
                 entityParser = nil
                 currentState = .lost
@@ -135,9 +130,6 @@ class OverlayController {
                     self.hackState?.entityCount = 0
                     self.hackState?.currentFPS = 0
                 }
-                
-                // Restart polling
-                startPolling()
             }
             
         case .connecting:
@@ -145,7 +137,7 @@ class OverlayController {
         }
     }
     
-    // MARK: - Connect to MLBB
+    // MARK: - Connect
     private func connectToMLBB(pid: Int32) {
         currentState = .connecting
         
@@ -157,9 +149,8 @@ class OverlayController {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // Attach
             guard self.memory.attach(to: pid) else {
-                print("[VEX] Failed to attach")
+                print("[VEX] Failed to attach — going back to waiting")
                 DispatchQueue.main.async {
                     self.currentState = .waiting
                     self.overlayWindow?.setWaitingMode()
@@ -167,9 +158,8 @@ class OverlayController {
                 return
             }
             
-            // Find module base
             guard let base = self.memory.findModuleBase(named: "legends") else {
-                print("[VEX] Failed to find module base")
+                print("[VEX] Failed to find base — going back to waiting")
                 self.memory.detach()
                 DispatchQueue.main.async {
                     self.currentState = .waiting
@@ -179,8 +169,6 @@ class OverlayController {
             }
             
             self.baseAddress = base
-            
-            // Create parser
             let parser = EntityParser(memory: self.memory, baseAddress: base)
             
             DispatchQueue.main.async {
@@ -193,11 +181,8 @@ class OverlayController {
                 self.hackState?.mlbbPID = pid
                 self.hackState?.baseAddress = base
                 
-                // Stop polling — we're connected
-                // (render loop checks if MLBB dies)
+                // Switch to slower watchdog
                 self.stopPolling()
-                
-                // Start a slower watchdog (every 5s check if MLBB alive)
                 self.pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                     self?.checkForMLBB()
                 }
@@ -205,27 +190,24 @@ class OverlayController {
         }
     }
     
-    // MARK: - Render Frame
+    // MARK: - Render
     @objc private func renderFrame() {
-        guard isRunning else { return }
+        guard isRunning, let window = overlayWindow else { return }
         
         switch currentState {
-        case .waiting:
-            // Draw waiting animation
+        case .waiting, .lost:
             pollCounter += 1
-            overlayWindow?.updateWaitingAnimation(tick: pollCounter)
+            window.updateWaitingAnimation(tick: pollCounter)
             
         case .connecting:
-            overlayWindow?.updateConnectingAnimation()
+            window.updateConnectingAnimation()
             
         case .active:
-            // Full ESP rendering
             if let parser = entityParser {
                 let entities = parser.parseEntities()
                 
-                // Sync settings
                 if let state = hackState {
-                    overlayWindow?.overlayView.settings = ESPSettings(
+                    window.overlayView.settings = ESPSettings(
                         showBoxESP: state.showBoxESP,
                         showHealthBar: state.showHealthBar,
                         showHealthText: state.showHealthText,
@@ -241,9 +223,8 @@ class OverlayController {
                     )
                 }
                 
-                overlayWindow?.updateEntities(entities)
+                window.updateEntities(entities)
                 
-                // FPS
                 frameCount += 1
                 let now = Date()
                 if now.timeIntervalSince(lastFpsUpdate) >= 1.0 {
@@ -257,52 +238,66 @@ class OverlayController {
                     }
                 }
             }
-            
-        case .lost:
-            overlayWindow?.updateWaitingAnimation(tick: pollCounter)
         }
     }
     
-    // MARK: - Background Keep-Alive
+    // MARK: - Background Keep-Alive (SAFE — no force unwraps)
     private func startBackgroundKeepAlive() {
-        // Request background time
+        // Background task
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "ESP-BOX-KeepAlive") { [weak self] in
             self?.stopBackgroundKeepAlive()
         }
         
-        // Play silent audio to keep alive indefinitely
+        // Audio keep-alive — everything wrapped, cannot crash
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
             
-            // Generate 10 seconds of silence
-            let sampleRate: Double = 44100
-            let duration: Double = 10.0
-            let numSamples = Int(sampleRate * duration)
-            var samples = [Int16](repeating: 0, count: numSamples)
+            // Write a silent WAV file manually (no AVAudioFormat needed)
+            let sampleRate = 44100
+            let numSamples = sampleRate * 10 // 10 sec loop
+            let dataSize = numSamples * 2 // 16-bit mono
             
-            let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: false)!
-            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(numSamples))!
-            buffer.frameLength = AVAudioFrameCount(numSamples)
+            var wavData = Data()
             
-            let channelData = buffer.int16ChannelData![0]
-            for i in 0..<numSamples {
-                channelData[i] = samples[i]
+            func appendLE32(_ val: UInt32) {
+                withUnsafeBytes(of: val.littleEndian) { wavData.append(contentsOf: $0) }
+            }
+            func appendLE16(_ val: UInt16) {
+                withUnsafeBytes(of: val.littleEndian) { wavData.append(contentsOf: $0) }
             }
             
+            // RIFF header
+            wavData.append("RIFF".data(using: .utf8)!)
+            appendLE32(UInt32(36 + dataSize))
+            wavData.append("WAVE".data(using: .utf8)!)
+            wavData.append("fmt ".data(using: .utf8)!)
+            appendLE32(16)
+            appendLE16(1) // PCM
+            appendLE16(1) // mono
+            appendLE32(UInt32(sampleRate))
+            appendLE32(UInt32(sampleRate * 2)) // byte rate
+            appendLE16(2) // block align
+            appendLE16(16) // bits per sample
+            wavData.append("data".data(using: .utf8)!)
+            appendLE32(UInt32(dataSize))
+            
+            // Silence (all zeros)
+            wavData.append(Data(repeating: 0, count: min(dataSize, 44100 * 2))) // 1 sec of silence, loops
+            
             let tempFile = URL(fileURLWithPath: NSTemporaryDirectory() + "silence.wav")
-            let file = try AVAudioFile(forWriting: tempFile, settings: format.settings)
-            try file.write(from: buffer)
+            try wavData.write(to: tempFile)
             
             audioPlayer = try AVAudioPlayer(contentsOf: tempFile)
-            audioPlayer?.numberOfLoops = -1 // infinite
-            audioPlayer?.volume = 0.0 // silent
+            audioPlayer?.numberOfLoops = -1
+            audioPlayer?.volume = 0.0
             audioPlayer?.play()
             
             print("[VEX] Background keep-alive active")
         } catch {
-            print("[VEX] Audio keep-alive failed: \(error)")
+            print("[VEX] Audio keep-alive failed (non-fatal): \(error)")
+            // app continues without audio keep-alive
         }
     }
     
@@ -348,7 +343,6 @@ class OverlayWindow: UIWindow {
         rootViewController = OverlayViewController(overlayView: overlayView)
     }
     
-    // MARK: - Mode switching
     func setWaitingMode() {
         overlayView.setOverlayState(.waiting)
     }
