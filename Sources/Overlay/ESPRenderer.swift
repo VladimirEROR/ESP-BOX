@@ -214,11 +214,7 @@ class ESPOverlayView: UIView {
         color: UIColor,
         fontSize: CGFloat
     ) {
-        let font = UIFont.monospacedDigitSystemFont(
-           (ofSize: fontSize,
-             weight: .medium
-            )
-        )
+        let font = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
         
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
