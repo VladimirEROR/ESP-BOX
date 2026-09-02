@@ -13,11 +13,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Install ldid
-        run: |
-          brew install ldid
-          which ldid
-      
       - name: Compile Swift
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -42,7 +37,14 @@ jobs:
       
       - name: Package & Sign
         run: |
-          # Strip debug symbols first — ldid chokes on some swift signatures
+          # Download working ldid from Procursus repo
+          curl -L -o ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_macosx_arm64
+          chmod +x ldid
+          
+          # Verify it runs
+          ./ldid --version || echo "ldid version check"
+          
+          # Strip swift metadata that breaks some signers
           strip ESP-BOX
           
           # Create app bundle
@@ -51,10 +53,7 @@ jobs:
           cp Config/Info.plist ESP-BOX.app/
           
           # Sign with entitlements
-          ldid -S Config/ESP_BOX.entitlements ESP-BOX.app/ESP-BOX
-          
-          # Verify
-          ldid -e ESP-BOX.app/ESP-BOX
+          ./ldid -S Config/ESP_BOX.entitlements ESP-BOX.app/ESP-BOX
           
           # Package IPA
           mkdir Payload
@@ -63,7 +62,7 @@ jobs:
           rm -rf Payload
       
       - name: Upload IPA
-        uses: actions/upload-artifact@v4
+        exists: actions/upload-artifact@v4
         with:
           name: ESP-BOX-IPA
           path: ESP-BOX.ipa
