@@ -15,7 +15,7 @@ jobs:
       
       - name: Install ldid
         run: |
-          brew install ldid || true
+          brew install ldid
           which ldid
       
       - name: Compile Swift
@@ -42,12 +42,21 @@ jobs:
       
       - name: Package & Sign
         run: |
+          # Strip debug symbols first — ldid chokes on some swift signatures
+          strip ESP-BOX
+          
+          # Create app bundle
           mkdir -p ESP-BOX.app
           cp ESP-BOX ESP-BOX.app/
           cp Config/Info.plist ESP-BOX.app/
           
+          # Sign with entitlements
           ldid -S Config/ESP_BOX.entitlements ESP-BOX.app/ESP-BOX
           
+          # Verify
+          ldid -e ESP-BOX.app/ESP-BOX
+          
+          # Package IPA
           mkdir Payload
           cp -r ESP-BOX.app Payload/
           zip -r ESP-BOX.ipa Payload
