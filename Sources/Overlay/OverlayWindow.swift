@@ -15,7 +15,8 @@ class OverlayController {
     
     private var memory: MemoryManager
     private var baseAddress: UInt64 = 0
-    private var overlayWindow: OverlayWindow?
+    private var overlayWindow: UIWindow?
+    private var overlayView: ESPOverlayView!
     private var displayLink: CADisplayLink?
     private var entityParser: EntityParser?
     
@@ -41,24 +42,19 @@ class OverlayController {
         self.hackState = settings
     }
     
-    // MARK: - Start (immediately — no MLBB needed)
+    // MARK: - Start
     func start() {
         guard !isRunning else { return }
         isRunning = true
         currentState = .waiting
         
-        // Background keep-alive (safe — won't crash)
         startBackgroundKeepAlive()
         
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // Create overlay window
-            self.overlayWindow = OverlayWindow(frame: UIScreen.main.bounds)
-            self.overlayWindow?.isHidden = false
-            self.overlayWindow?.setWaitingMode()
+            self.createOverlayWindow()
             
-            // Start render loop — delayed by 1 frame to let window settle
             self.displayLink = CADisplayLink(
                 target: self,
                 selector: #selector(self.renderFrame)
@@ -66,9 +62,50 @@ class OverlayController {
             self.displayLink?.preferredFramesPerSecond = 30
             self.displayLink?.add(to: .main, forMode: .common)
             
-            // Start polling for MLBB
             self.startPolling()
         }
+    }
+    
+    // MARK: - Create overlay window attached to scene
+    private func createOverlayWindow() {
+        // Get the active window scene
+        guard let windowScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first else {
+            print("[VEX] No window scene found!")
+            return
+        }
+        
+        // Create window WITH the scene
+        let window = UIWindow(windowScene: windowScene)
+        window.windowLevel = UIWindow.Level.alert + 100
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.isUserInteractionEnabled = false
+        
+        // Create the view
+        overlayView = ESPOverlayView(frame: windowScene.coordinateSpace.bounds)
+        overlayView.backgroundColor = .clear
+        overlayView.isUserInteractionEnabled = false
+        
+        let rootVC = OverlayViewController(overlayView: overlayView)
+        window.rootViewController = rootVC
+        
+        // Show it
+        window.isHidden = false
+        window.makeKeyAndVisible()
+        // Bring back the original key window so SwiftUI stays in control
+        // (don't steal key permanently)
+        
+        overlayWindow = window
+        
+        print("[VEX] Overlay window created on scene: \(windowScene)")
+        
+        // Set initial state
+        overlayView.setOverlayState(.waiting)
     }
     
     // MARK: - Stop
@@ -83,8 +120,11 @@ class OverlayController {
             guard let self = self else { return }
             self.displayLink?.invalidate()
             self.displayLink = nil
+            
             self.overlayWindow?.isHidden = true
+            self.overlayWindow?.rootViewController = nil
             self.overlayWindow = nil
+            self.overlayView = nil
         }
     }
     
@@ -114,7 +154,6 @@ class OverlayController {
             }
             
         case .active:
-            // Check if MLBB still alive
             if ProcessFinder.findPID(byName: "legends") == nil
                 && ProcessFinder.findPID(byName: "MLBB") == nil {
                 print("[VEX] MLBB closed — back to waiting")
@@ -123,7 +162,7 @@ class OverlayController {
                 currentState = .lost
                 
                 DispatchQueue.main.async {
-                    self.overlayWindow?.setWaitingMode()
+                    self.overlayView?.setOverlayState(.waiting)
                     self.hackState?.isConnected = false
                     self.hackState?.statusText = "Game Closed — Waiting..."
                     self.hackState?.mlbbPID = 0
@@ -142,7 +181,7 @@ class OverlayController {
         currentState = .connecting
         
         DispatchQueue.main.async {
-            self.overlayWindow?.setConnectingMode()
+            self.overlayView?.setOverlayState(.connecting)
             self.hackState?.statusText = "Connecting to MLBB..."
         }
         
@@ -150,20 +189,20 @@ class OverlayController {
             guard let self = self else { return }
             
             guard self.memory.attach(to: pid) else {
-                print("[VEX] Failed to attach — going back to waiting")
+                print("[VEX] Failed to attach")
                 DispatchQueue.main.async {
                     self.currentState = .waiting
-                    self.overlayWindow?.setWaitingMode()
+                    self.overlayView?.setOverlayState(.waiting)
                 }
                 return
             }
             
             guard let base = self.memory.findModuleBase(named: "legends") else {
-                print("[VEX] Failed to find base — going back to waiting")
+                print("[VEX] Failed to find base")
                 self.memory.detach()
                 DispatchQueue.main.async {
                     self.currentState = .waiting
-                    self.overlayWindow?.setWaitingMode()
+                    self.overlayView?.setOverlayState(.waiting)
                 }
                 return
             }
@@ -174,14 +213,13 @@ class OverlayController {
             DispatchQueue.main.async {
                 self.entityParser = parser
                 self.currentState = .active
-                self.overlayWindow?.setActiveMode()
+                self.overlayView?.setOverlayState(.active)
                 
                 self.hackState?.isConnected = true
                 self.hackState?.statusText = "Connected"
                 self.hackState?.mlbbPID = pid
                 self.hackState?.baseAddress = base
                 
-                // Switch to slower watchdog
                 self.stopPolling()
                 self.pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                     self?.checkForMLBB()
@@ -192,22 +230,22 @@ class OverlayController {
     
     // MARK: - Render
     @objc private func renderFrame() {
-        guard isRunning, let window = overlayWindow else { return }
+        guard isRunning, let view = overlayView else { return }
         
         switch currentState {
         case .waiting, .lost:
             pollCounter += 1
-            window.updateWaitingAnimation(tick: pollCounter)
+            view.updateWaitingTick(pollCounter)
             
         case .connecting:
-            window.updateConnectingAnimation()
+            view.updateConnectingTick()
             
         case .active:
             if let parser = entityParser {
                 let entities = parser.parseEntities()
                 
                 if let state = hackState {
-                    window.overlayView.settings = ESPSettings(
+                    view.settings = ESPSettings(
                         showBoxESP: state.showBoxESP,
                         showHealthBar: state.showHealthBar,
                         showHealthText: state.showHealthText,
@@ -223,11 +261,11 @@ class OverlayController {
                     )
                 }
                 
-                window.updateEntities(entities)
+                view.updateEntities(entities)
                 
                 frameCount += 1
                 let now = Date()
-                if now.timeIntervalSince(lastFpsUpdate) >= 1.0 {
+                if now.timeTimeIntervalSince(lastFpsUpdate) >= 1.0 {
                     let fps = frameCount
                     frameCount = 0
                     lastFpsUpdate = now
@@ -241,23 +279,19 @@ class OverlayController {
         }
     }
     
-    // MARK: - Background Keep-Alive (SAFE — no force unwraps)
+    // MARK: - Background Keep-Alive
     private func startBackgroundKeepAlive() {
-        // Background task
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "ESP-BOX-KeepAlive") { [weak self] in
             self?.stopBackgroundKeepAlive()
         }
         
-        // Audio keep-alive — everything wrapped, cannot crash
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
             
-            // Write a silent WAV file manually (no AVAudioFormat needed)
             let sampleRate = 44100
-            let numSamples = sampleRate * 10 // 10 sec loop
-            let dataSize = numSamples * 2 // 16-bit mono
+            let dataSize = 44100 * 2
             
             var wavData = Data()
             
@@ -268,23 +302,21 @@ class OverlayController {
                 withUnsafeBytes(of: val.littleEndian) { wavData.append(contentsOf: $0) }
             }
             
-            // RIFF header
             wavData.append("RIFF".data(using: .utf8)!)
             appendLE32(UInt32(36 + dataSize))
             wavData.append("WAVE".data(using: .utf8)!)
             wavData.append("fmt ".data(using: .utf8)!)
             appendLE32(16)
-            appendLE16(1) // PCM
-            appendLE16(1) // mono
+            appendLE16(1)
+            appendLE16(1)
             appendLE32(UInt32(sampleRate))
-            appendLE32(UInt32(sampleRate * 2)) // byte rate
-            appendLE16(2) // block align
-            appendLE16(16) // bits per sample
+            appendLE32(UInt32(sampleRate * 2))
+            appendLE16(2)
+            appendLE16(16)
             wavData.append("data".data(using: .utf8)!)
             appendLE32(UInt32(dataSize))
             
-            // Silence (all zeros)
-            wavData.append(Data(repeating: 0, count: min(dataSize, 44100 * 2))) // 1 sec of silence, loops
+            wavData.append(Data(repeating: 0, count: min(dataSize, 44100 * 2)))
             
             let tempFile = URL(fileURLWithPath: NSTemporaryDirectory() + "silence.wav")
             try wavData.write(to: tempFile)
@@ -297,7 +329,6 @@ class OverlayController {
             print("[VEX] Background keep-alive active")
         } catch {
             print("[VEX] Audio keep-alive failed (non-fatal): \(error)")
-            // app continues without audio keep-alive
         }
     }
     
@@ -314,68 +345,13 @@ class OverlayController {
     }
 }
 
-// MARK: - Overlay Window
-class OverlayWindow: UIWindow {
-    
-    var overlayView: ESPOverlayView!
-    
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setup()
-    }
-    
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setup()
-    }
-    
-    private func setup() {
-        windowLevel = UIWindow.Level.alert + 100
-        backgroundColor = .clear
-        isOpaque = false
-        isUserInteractionEnabled = false
-        clearsContextBeforeDrawing = true
-        
-        overlayView = ESPOverlayView(frame: UIScreen.main.bounds)
-        overlayView.backgroundColor = .clear
-        overlayView.isUserInteractionEnabled = false
-        
-        rootViewController = OverlayViewController(overlayView: overlayView)
-    }
-    
-    func setWaitingMode() {
-        overlayView.setOverlayState(.waiting)
-    }
-    
-    func setConnectingMode() {
-        overlayView.setOverlayState(.connecting)
-    }
-    
-    func setActiveMode() {
-        overlayView.setOverlayState(.active)
-    }
-    
-    func updateWaitingAnimation(tick: Int) {
-        overlayView.updateWaitingTick(tick)
-    }
-    
-    func updateConnectingAnimation() {
-        overlayView.updateConnectingTick()
-    }
-    
-    func updateEntities(_ entities: [ESPBox]) {
-        overlayView.updateEntities(entities)
-    }
-    
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        return nil
-    }
-}
-
 // MARK: - Overlay View Controller
 class OverlayViewController: UIViewController {
     
+    private let overlayView: ESPOverlayView
+    
     init(overlayView: ESPOverlayView) {
+        self.overlayView = overlayView
         super.init(nibName: nil, bundle: nil)
         self.view = overlayView
     }
