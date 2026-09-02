@@ -14,7 +14,7 @@ enum OverlayState {
 }
 
 // MARK: - PIP Overlay Controller
-class OverlayController {
+class OverlayController: NSObject {
     
     private var memory: MemoryManager
     private var baseAddress: UInt64 = 0
@@ -42,11 +42,16 @@ class OverlayController {
     private var displayLayer: AVSampleBufferDisplayLayer?
     private var pipView: UIView?
     
+    // Fallback window
+    private var fallbackWindow: UIWindow?
+    private var fallbackView: ESPOverlayView?
+    
     // MARK: - Init
     init(memoryManager: MemoryManager, baseAddress: UInt64, settings: HackState) {
         self.memory = memoryManager
         self.baseAddress = baseAddress
         self.hackState = settings
+        super.init()
     }
     
     // MARK: - Start
@@ -75,42 +80,231 @@ class OverlayController {
         stopDisplayLink()
         stopPIP()
         stopBackgroundKeepAlive()
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.fallbackWindow?.isHidden = true
+            self.fallbackWindow = nil
+            self.fallbackView = nil
+        }
     }
     
     // MARK: - Setup PIP Layer
     private func setupPIPLayer() {
-        // Create the display layer for PIP
         let layer = AVSampleBufferDisplayLayer()
         layer.frame = CGRect(x: 0, y: 0, width: 300, height: 150)
         layer.videoGravity = .resizeAspect
         
-        // Create a hidden host view for the layer
+        // Hidden host view for the layer
         let hostView = UIView(frame: CGRect(x: -1000, y: -1000, width: 300, height: 150))
         hostView.layer.addSublayer(layer)
-        // Add to window so it has a rendering context
-        if let window = UIApplication.shared.windows.first {
+        
+        // Add to a window so it has a rendering context
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+           let window = scene.windows.first {
             window.addSubview(hostView)
         }
         
         displayLayer = layer
         pipView = hostView
         
-        // Create PIP controller
         if AVPictureInPictureController.isPictureInPictureSupported() {
-            let pip = AVPictureInPictureController(contentLayer: layer)
+            // iOS 15+ — use the initializer with content source
+            if #available(iOS 15.0, *) {
+                let sampleBufferPlaybackCoordinator = AVSampleBufferPlaybackCoordinator()
+                // Not available — we need AVPlayerLayer approach
+                
+                // PIP with AVSampleBufferDisplayLayer isn't directly supported on iOS
+                // We need to use AVPlayerLayer instead
+                setupWithAVPlayer()
+                return
+            }
+        } else {
+            print("[VEX] PIP not supported — using window fallback")
+            setupFallbackWindow()
+        }
+    }
+    
+    // MARK: - PIP with AVPlayerLayer (the correct way)
+    private var player: AVPlayer?
+    private var playerLayer: AVPlayerLayer?
+    private var videoOutput: AVPlayerItemVideoOutput?
+    
+    private func setupWithAVPlayer() {
+        // Create a blank video item
+        let videoUrl = generateBlankVideo()
+        
+        guard let url = videoUrl else {
+            print("[VEX] Failed to generate video — using fallback")
+            setupFallbackWindow()
+            return
+        }
+        
+        let item = AVPlayerItem(url: url)
+        item.audioTimePitchAlgorithm = .varispeed
+        
+        let avPlayer = AVPlayer(playerItem: item)
+        avPlayer.isMuted = true
+        avPlayer.playImmediately(atRate: 0.1)
+        
+        player = avPlayer
+        
+        // Create player layer
+        let layer = AVPlayerLayer(player: avPlayer)
+        layer.frame = CGRect(x: 0, y: 0, width: 300, height: 150)
+        layer.videoGravity = .resizeAspect
+        
+        // Hidden host view
+        let hostView = UIView(frame: CGRect(x: -1000, y: -1000, width: 300, height: 150))
+        hostView.layer.addSublayer(layer)
+        
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+           let window = scene.windows.first {
+            window.addSubview(hostView)
+        }
+        
+        playerLayer = layer
+        pipView = hostView
+        
+        // Loop the video
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            self?.player?.seek(to: .zero)
+            self?.player?.play()
+        }
+        
+        // Create PIP controller with the player layer
+        if #available(iOS 15.0, *) {
+            let pip = AVPictureInPictureController(playerLayer: layer)
             pip.delegate = self
             pipController = pip
             
-            print("[VEX] PIP supported — attempting to start")
+            print("[VEX] PIP supported — starting...")
             
-            // Start PIP after a short delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.startPIP()
             }
-        } else {
-            print("[VEX] PIP not supported on this device — falling back to window overlay")
-            setupFallbackWindow()
         }
+    }
+    
+    // MARK: - Generate a tiny blank video for PIP
+    private func generateBlankVideo() -> URL? {
+        // Write a minimal MP4 file — just a black frame
+        // We use AVAssetWriter for this
+        let outputURL = URL(fileURLWithPath: NSTemporaryDirectory() + "blank.mp4")
+        
+        try? FileManager.default.removeItem(at: outputURL)
+        
+        guard let writer = try? AVAssetWriter(outputURL: outputURL, fileType: .mp4) else {
+            return nil
+        }
+        
+        let width = 320
+        let height = 160
+        let fps: Int32 = 10
+        
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height
+        ]
+        
+        guard let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings) else {
+            return nil
+        }
+        
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: writerInput,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height
+            ]
+        )
+        
+        writer.add(writerInput)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        
+        // Write 30 frames (3 seconds at 10fps)
+        for frame in 0..<30 {
+            while !writerInput.isReadyForMoreMediaData {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            
+            var pixelBuffer: CVPixelBuffer?
+            
+            let attrs: [String: Any] = [
+                kCVPixelBufferCGImageCompatibilityKey as String: true,
+                kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+            ]
+            
+            CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                width,
+                height,
+                kCVPixelFormatType_32ARGB,
+                attrs as CFDictionary,
+                &pixelBuffer
+            )
+            
+            guard let buffer = pixelBuffer else { continue }
+            
+            // Draw a dark red frame
+            CVPixelBufferLockBaseAddress(buffer, [])
+            if let context = CGContext(
+                data: CVPixelBufferGetBaseAddress(buffer),
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+            ) {
+                context.setFillColor(UIColor(red: 0.08, green: 0.02, blue: 0.02, alpha: 1.0).cgColor)
+                context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                
+                // ESP-BOX text
+                UIGraphicsPushContext(context)
+                let font = UIFont.systemFont(ofSize: 24, weight: .black)
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: font,
+                    .foregroundColor: UIColor(red: 1, green: 0.3, blue: 0.3, alpha: 1.0)
+                ]
+                NSAttributedString(string: "ESP-BOX", attributes: attrs)
+                    .draw(at: CGPoint(x: 80, y: 60))
+                UIGraphicsPopContext()
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            
+            let time = CMTime(value: CMTimeValue(frame), timescale: fps)
+            adaptor.append(buffer, withPresentationTime: time)
+        }
+        
+        writerInput.markAsFinished()
+        writer.finishWriting {
+            print("[VEX] Blank video generated: \(outputURL)")
+        }
+        
+        // Wait for writing to complete
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            while writer.status == .writing {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        
+        if writer.status == .completed {
+            return outputURL
+        }
+        
+        print("[VEX] Video generation failed: \(writer.error?.localizedDescription ?? "unknown")")
+        return nil
     }
     
     // MARK: - Start PIP
@@ -119,15 +313,14 @@ class OverlayController {
         
         pip.startPictureInPicture()
         
-        // Check after 1 second if it started
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self = self, let pip = self.pipController else { return }
             
             if !pip.isPictureInPictureActive {
-                print("[VEX] PIP didn't start — trying window fallback")
+                print("[VEX] PIP didn't start — using window fallback")
                 self.setupFallbackWindow()
             } else {
-                print("[VEX] PIP ACTIVE — overlay floating")
+                print("[VEX] PIP ACTIVE — overlay floating on screen")
             }
         }
     }
@@ -136,15 +329,16 @@ class OverlayController {
     private func stopPIP() {
         pipController?.stopPictureInPicture()
         pipController = nil
+        player?.pause()
+        player = nil
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
         displayLayer = nil
         pipView?.removeFromSuperview()
         pipView = nil
     }
     
-    // MARK: - Fallback Window (if PIP not available)
-    private var fallbackWindow: UIWindow?
-    private var fallbackView: ESPOverlayView?
-    
+    // MARK: - Fallback Window
     private func setupFallbackWindow() {
         guard fallbackWindow == nil else { return }
         
@@ -167,9 +361,6 @@ class OverlayController {
         
         fallbackWindow = window
         fallbackView = view
-        
-        // Update the display layer to point to our view
-        displayLayer = nil // PIP not available, render via view instead
     }
     
     // MARK: - Display Link
@@ -187,6 +378,7 @@ class OverlayController {
     // MARK: - Polling
     private func startPolling() {
         stopPolling()
+        
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.checkForMLBB()
         }
@@ -273,14 +465,13 @@ class OverlayController {
     @objc private func renderFrame() {
         guard isRunning else { return }
         
-        // Render current state into either PIP layer or fallback view
+        // If fallback view exists, render there
         if let view = fallbackView {
-            // Fallback: render into ESPOverlayView
             renderToView(view)
-        } else if let layer = displayLayer {
-            // PIP: render into a pixel buffer and push to display layer
-            renderToPIPLayer(layer)
         }
+        // If PIP is active, the video loops automatically
+        // (we can't draw into PIP live — it plays a video)
+        // For live updates we rely on the fallback window while in foreground
     }
     
     private func renderToView(_ view: ESPOverlayView) {
@@ -317,248 +508,6 @@ class OverlayController {
                 updateFPS(entities.count)
             }
         }
-    }
-    
-    private func renderToPIPLayer(_ layer: AVSampleBufferDisplayLayer) {
-        // Create a pixel buffer with the ESP widget rendered into it
-        let width = 300
-        let height = 150
-        
-        var pixelBuffer: CVPixelBuffer?
-        
-        let attrs: [String: Any] = [
-            kCVPixelBufferCGImageCompatibilityKey as String: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
-        ]
-        
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault,
-            width,
-            height,
-            kCVPixelFormatType_32ARGB,
-            attrs as CFDictionary,
-            &pixelBuffer
-        )
-        
-        guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return }
-        
-        // Lock the buffer for drawing
-        CVPixelBufferLockBaseAddress(buffer, [])
-        guard let context = CGContext(
-            data: CVPixelBufferGetBaseAddress(buffer),
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-        ) else {
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-            return
-        }
-        
-        // Clear
-        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
-        
-        // Draw the widget based on state
-        switch currentState {
-        case .waiting, .lost:
-            drawPIPWaiting(ctx: context, width: width, height: height)
-            
-        case .connecting:
-            drawPIPConnecting(ctx: context, width: width, height: height)
-            
-        case .active:
-            if let parser = entityParser {
-                let entities = parser.parseEntities()
-                drawPIPActive(ctx: context, width: width, height: height, entities: entities)
-                updateFPS(entities.count)
-            }
-        }
-        
-        CVPixelBufferUnlockBaseAddress(buffer, [])
-        
-        // Convert to CMSampleBuffer and push to display layer
-        pushToDisplayLayer(layer, pixelBuffer: buffer, width: width, height: height)
-    }
-    
-    private func pushToDisplayLayer(_ layer: AVSampleBufferDisplayLayer, pixelBuffer: CVPixelBuffer, width: Int, height: Int) {
-        var formatDescription: CMVideoFormatDescription?
-        CMVideoFormatDescriptionCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescriptionOut: &formatDescription
-        )
-        
-        guard let format = formatDescription else { return }
-        
-        let timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: 20),
-            presentationTimeStamp: CMTime(value: CMTimeValue(pollCounter), timescale: 20),
-            decodeTimeStamp: .invalid
-        )
-        
-        var sampleBuffer: CMSampleBuffer?
-        CMSampleBufferCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            dataIsReady: true,
-            makeDataReadyCallback: nil,
-            refcon: nil,
-            formatDescription: format,
-            sampleTiming: &timing,
-            sampleBufferOut: &sampleBuffer
-        )
-        
-        guard let sample = sampleBuffer else { return }
-        
-        // Push to the display layer
-        if layer.status == .failed {
-            layer.flush()
-        }
-        
-        layer.enqueue(sample)
-    }
-    
-    // MARK: - PIP Widget Drawing (small format 300x150)
-    private func drawPIPWaiting(ctx: CGContext, width: Int, height: Int) {
-        pollCounter += 1
-        
-        // Background — semi-transparent dark red
-        let bgPath = CGPath(
-            roundedRect: CGRect(x: 0, y: 0, width: width, height: height),
-            cornerWidth: 20,
-            cornerHeight: 20,
-            transform: nil
-        )
-        ctx.addPath(bgPath)
-        ctx.setFillColor(UIColor(red: 0.08, green: 0.02, blue: 0.02, alpha: 0.92).cgColor)
-        ctx.fillPath()
-        
-        // Border
-        ctx.addPath(bgPath)
-        ctx.setStrokeColor(UIColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 0.8).cgColor)
-        ctx.setLineWidth(2)
-        ctx.strokePath()
-        
-        // Pulsing dot
-        let pulse = (sin(Double(pollCounter) * 0.1) + 1.0) / 2.0
-        let dotAlpha = CGFloat(0.3 + pulse * 0.7)
-        
-        let dotRect = CGRect(x: 20, y: CGFloat(height/2 - 8), width: 16, height: 16)
-        ctx.setShadow(offset: .zero, blur: 8, color: UIColor(red: 1, green: 0.3, blue: 0.3, alpha: dotAlpha).cgColor)
-        ctx.setFillColor(UIColor(red: 1, green: 0.3, blue: 0.3, alpha: dotAlpha).cgColor)
-        ctx.fillEllipse(in: dotRect)
-        ctx.setShadow(offset: .zero, blur: 0, color: nil)
-        
-        // Text
-        drawText(ctx: ctx, text: "ESP-BOX", at: CGPoint(x: 48, y: 40), size: 20, color: UIColor(red: 1, green: 0.3, blue: 0.3, alpha: 1))
-        
-        let dots = String(repeating: ".", count: (pollCounter / 10) % 4)
-        drawText(ctx: ctx, text: "Waiting for MLBB\(dots)", at: CGPoint(x: 48, y: 68), size: 14, color: UIColor(red: 0.7, green: 0.5, blue: 0.5, alpha: 0.9))
-        
-        drawText(ctx: ctx, text: "Open Mobile Legends to activate", at: CGPoint(x: 20, y: height - 30), size: 11, color: UIColor(red: 0.5, green: 0.4, blue: 0.4, alpha: 0.7))
-    }
-    
-    private func drawPIPConnecting(ctx: CGContext, width: Int, height: Int) {
-        // Background — dark green
-        let bgPath = CGPath(
-            roundedRect: CGRect(x: 0, y: 0, width: width, height: height),
-            cornerWidth: 20,
-            cornerHeight: 20,
-            transform: nil
-        )
-        ctx.addPath(bgPath)
-        ctx.setFillColor(UIColor(red: 0.02, green: 0.08, blue: 0.02, alpha: 0.92).cgColor)
-        ctx.fillPath()
-        
-        ctx.addPath(bgPath)
-        ctx.setStrokeColor(UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 0.8).cgColor)
-        ctx.setLineWidth(2)
-        ctx.strokePath()
-        
-        // Spinning arc
-        let spinAngle = CGFloat(pollCounter) * 0.15
-        let centerX = CGFloat(width - 40)
-        let centerY = CGFloat(height / 2)
-        
-        ctx.saveGState()
-        ctx.translateBy(x: centerX, y: centerY)
-        ctx.rotate(by: spinAngle)
-        ctx.setStrokeColor(UIColor(red: 0.3, green: 0.9, blue: 0.4, alpha: 0.9).cgColor)
-        ctx.setLineWidth(3)
-        ctx.setLineCap(.round)
-        ctx.addArc(center: .zero, radius: 14, startAngle: 0, endAngle: .pi * 1.5, clockwise: false)
-        ctx.strokePath()
-        ctx.restoreGState()
-        
-        drawText(ctx: ctx, text: "ESP-BOX", at: CGPoint(x: 20, y: 40), size: 20, color: UIColor(red: 0.3, green: 0.9, blue: 0.4, alpha: 1))
-        drawText(ctx: ctx, text: "Connecting to MLBB...", at: CGPoint(x: 20, y: 68), size: 14, color: UIColor(red: 0.5, green: 0.7, blue: 0.5, alpha: 0.9))
-    }
-    
-    private func drawPIPActive(ctx: CGContext, width: Int, height: Int, entities: [ESPBox]) {
-        // Show mini status — PIP is too small for full ESP
-        // This shows: connected status, player count, HP of enemies nearby
-        
-        let bgPath = CGPath(
-            roundedRect: CGRect(x: 0, y: 0, width: width, height: height),
-            cornerWidth: 20,
-            cornerHeight: 20,
-            transform: nil
-        )
-        ctx.addPath(bgPath)
-        ctx.setFillColor(UIColor(red: 0.02, green: 0.08, blue: 0.02, alpha: 0.92).cgColor)
-        ctx.fillPath()
-        
-        ctx.addPath(bgPath)
-        ctx.setStrokeColor(UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 0.8).cgColor)
-        ctx.setLineWidth(2)
-        ctx.strokePath()
-        
-        drawText(ctx: ctx, text: "ESP ACTIVE", at: CGPoint(x: 20, y: 25), size: 16, color: UIColor(red: 0.3, green: 0.9, blue: 0.4, alpha: 1))
-        drawText(ctx: ctx, text: "Players: \(entities.filter({ !$0.isSelf }).count)", at: CGPoint(x: 20, y: 50), size: 14, color: .white)
-        
-        // Enemy HP list (up to 3 closest enemies)
-        let enemies = entities.filter({ $0.isEnemy && !$0.isDead }).sorted { $0.distance < $1.distance }
-        
-        var yPos = 75
-        for enemy in enemies.prefix(3) {
-            let hpRatio = CGFloat(enemy.health) / CGFloat(max(enemy.healthMax, 1))
-            
-            // HP bar
-            let barWidth = CGFloat(width - 80)
-            let barRect = CGRect(x: 70, y: yPos, width: barWidth, height: 6)
-            ctx.setFillColor(UIColor.black.withAlphaComponent(0.5).cgColor)
-            ctx.fill(barRect)
-            
-            let hpColor = hpRatio > 0.5 
-                ? UIColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 0.9)
-                : UIColor(red: 0.9, green: 0.6, blue: 0.1, alpha: 0.9)
-            
-            let hpRect = CGRect(x: 70, y: yPos, width: barWidth * hpRatio, height: 6)
-            ctx.setFillColor(hpColor.cgColor)
-            ctx.fill(hpRect)
-            
-            // Distance
-            drawText(ctx: ctx, text: String(format: "%.0fm", enemy.distance), at: CGPoint(x: 20, y: yPos - 4), size: 12, color: .white)
-            
-            // HP text
-            drawText(ctx: ctx, text: "\(enemy.health)", at: CGPoint(x: Int(width) - 40, y: yPos - 4), size: 12, color: .white)
-            
-            yPos += 18
-        }
-    }
-    
-    private func drawText(ctx: CGContext, text: String, at point: CGPoint, size: CGFloat, color: UIColor) {
-        let font = UIFont.monospacedDigitSystemFont(ofSize: size, weight: .bold)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: color
-        ]
-        
-        UIGraphicsPushContext(ctx)
-        NSAttributedString(string: text, attributes: attrs).draw(at: point)
-        UIGraphicsPopContext()
     }
     
     private func updateFPS(_ count: Int) {
@@ -622,6 +571,8 @@ class OverlayController {
             audioPlayer?.numberOfLoops = -1
             audioPlayer?.volume = 0.0
             audioPlayer?.play()
+            
+            print("[VEX] Background keep-alive active")
         } catch {
             print("[VEX] Audio keep-alive failed: \(error)")
         }
@@ -640,7 +591,7 @@ class OverlayController {
     }
 }
 
-// MARK: - PIP Controller Delegate
+// MARK: - PIP Delegate
 extension OverlayController: AVPictureInPictureControllerDelegate {
     
     func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
@@ -648,11 +599,11 @@ extension OverlayController: AVPictureInPictureControllerDelegate {
     }
     
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        print("[VEX] PIP started — overlay is now floating")
+        print("[VEX] PIP started — overlay floating")
     }
     
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        print("[VEX] PIP failed: \(error.localizedDescription) — falling back to window")
+        print("[VEX] PIP failed: \(error.localizedDescription) — using window fallback")
         DispatchQueue.main.async {
             self.setupFallbackWindow()
         }
