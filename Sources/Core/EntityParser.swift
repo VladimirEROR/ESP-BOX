@@ -1,5 +1,5 @@
 import Foundation
-import CoreGraphics
+import UIKit
 
 // MARK: - Data Types
 struct Vector3 {
