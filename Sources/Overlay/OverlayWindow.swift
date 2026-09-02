@@ -265,7 +265,7 @@ class OverlayController {
                 
                 frameCount += 1
                 let now = Date()
-                if now.timeTimeIntervalSince(lastFpsUpdate) >= 1.0 {
+                if now.timeIntervalSince(lastFpsUpdate) >= 1.0 {
                     let fps = frameCount
                     frameCount = 0
                     lastFpsUpdate = now
