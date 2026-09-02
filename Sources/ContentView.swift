@@ -17,7 +17,7 @@ struct ContentView: View {
 }
 
 // ============================================================
-// MARK: - ACTIVATION SCREEN (Key Input)
+// MARK: - ACTIVATION SCREEN
 // ============================================================
 struct ActivationView: View {
     @Binding var isActivated: Bool
@@ -27,7 +27,6 @@ struct ActivationView: View {
     @State private var attempts = 0
     @State private var glow = false
 
-    // 🔑 CHANGE YOUR VALID KEYS HERE
     let validKeys = [
         "VLADIMIR-MLBB-2024",
         "ESP-BOX-PREMIUM",
@@ -61,7 +60,6 @@ struct ActivationView: View {
                     .foregroundColor(Color(red: 1, green: 0.3, blue: 0.3))
                     .padding(.top, 6)
 
-                // Key input
                 HStack {
                     Image(systemName: "key.fill")
                         .foregroundColor(Color(red: 0.72, green: 0.44, blue: 0.44))
@@ -94,7 +92,6 @@ struct ActivationView: View {
                 .padding(.top, 40)
                 .modifier(ShakeEffect(animatableData: CGFloat(attempts)))
 
-                // Error message
                 if showError {
                     Text(errorMessage)
                         .font(.system(size: 13, weight: .medium))
@@ -102,7 +99,6 @@ struct ActivationView: View {
                         .transition(.opacity)
                 }
 
-                // Activate button
                 Button(action: activate) {
                     HStack(spacing: 10) {
                         Image(systemName: "checkmark.seal.fill")
@@ -158,7 +154,6 @@ struct ActivationView: View {
     }
 }
 
-// Shake effect for wrong key
 struct ShakeEffect: GeometryEffect {
     var animatableData: CGFloat
     func effectValue(size: CGSize) -> ProjectionTransform {
@@ -168,7 +163,7 @@ struct ShakeEffect: GeometryEffect {
 }
 
 // ============================================================
-// MARK: - MAIN SCREEN (ESP-BOX UI)
+// MARK: - MAIN SCREEN
 // ============================================================
 struct MainView: View {
     @StateObject private var hackState = HackState.shared
@@ -194,15 +189,14 @@ struct MainView: View {
                     StatsGrid()
                         .padding(.top, 40)
 
-                    // Live status + settings when connected
                     if hackState.isConnected {
                         LiveStatusCard()
                             .padding(.top, 20)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.opacity.combined(with: .move(from: .top)))
 
                         SettingsPanel()
                             .padding(.top, 16)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            .transition(.opacity.combined(with: .move(from: .bottom)))
                     }
 
                     Text("Preview")
@@ -247,7 +241,7 @@ struct MainView: View {
     }
 }
 
-// MARK: - Header + Animated Logo
+// MARK: - Header
 struct HeaderView: View {
     var body: some View {
         HStack(spacing: 18) {
@@ -383,16 +377,13 @@ struct StatsGrid: View {
     }
 }
 
-// ============================================================
-// MARK: - LIVE STATUS (shown when connected)
-// ============================================================
+// MARK: - Live Status
 struct LiveStatusCard: View {
     @ObservedObject var hackState = HackState.shared
 
     var body: some View {
         VStack(spacing: 14) {
             HStack(spacing: 12) {
-                // Pulsing green dot
                 ZStack {
                     Circle()
                         .fill(Color.green)
@@ -421,7 +412,6 @@ struct LiveStatusCard: View {
 
                 Spacer()
 
-                // FPS badge
                 VStack(spacing: 2) {
                     Text("\(hackState.currentFPS)")
                         .font(.system(size: 22, weight: .heavy, design: .monospaced))
@@ -471,15 +461,12 @@ struct LiveStatusCard: View {
     }
 }
 
-// ============================================================
-// MARK: - SETTINGS PANEL
-// ============================================================
+// MARK: - Settings Panel
 struct SettingsPanel: View {
     @ObservedObject var hackState = HackState.shared
 
     var body: some View {
         VStack(spacing: 0) {
-            // Section header
             HStack {
                 Text("FEATURES")
                     .font(.system(size: 11, weight: .heavy, design: .monospaced))
@@ -491,7 +478,6 @@ struct SettingsPanel: View {
             .padding(.top, 14)
             .padding(.bottom, 10)
 
-            // Toggles
             ESPToggleRow(title: "Box ESP", icon: "square.dashed", isOn: $hackState.showBoxESP)
             ESPToggleRow(title: "Health Bar", icon: "heart.fill", isOn: $hackState.showHealthBar)
             ESPToggleRow(title: "Distance", icon: "ruler.fill", isOn: $hackState.showDistance)
@@ -502,11 +488,9 @@ struct SettingsPanel: View {
                 .background(Color.red.opacity(0.1))
                 .padding(.vertical, 10)
 
-            // Colors
             ESPColorRow(title: "Enemy Color", color: $hackState.enemyColor)
             ESPColorRow(title: "Ally Color", color: $hackState.allyColor)
 
-            // Box thickness
             VStack(spacing: 8) {
                 HStack {
                     Text("Box Thickness")
@@ -793,7 +777,7 @@ struct StartButton: View {
 }
 
 // ============================================================
-// MARK: - REAL LOADING SCREEN (connects to MLBB)
+// MARK: - LOADING SCREEN (spawns overlay immediately)
 // ============================================================
 struct RealLoadingView: View {
     @Binding var showLoading: Bool
@@ -803,7 +787,7 @@ struct RealLoadingView: View {
     @State private var spin = false
     @State private var done = false
     @State private var failed = false
-    @State private var statusText = "Finding MLBB process..."
+    @State private var statusText = "Starting..."
     @State private var errorDetail = ""
 
     var body: some View {
@@ -816,7 +800,6 @@ struct RealLoadingView: View {
                 Spacer()
 
                 if done {
-                    // Success checkmark
                     ZStack {
                         Circle()
                             .fill(Color.green.opacity(0.15))
@@ -831,7 +814,6 @@ struct RealLoadingView: View {
                     .shadow(color: .green.opacity(0.6), radius: 25)
                     .transition(.scale.combined(with: .opacity))
                 } else if failed {
-                    // Failure X
                     ZStack {
                         Circle()
                             .fill(Color.red.opacity(0.15))
@@ -846,7 +828,6 @@ struct RealLoadingView: View {
                     .shadow(color: .red.opacity(0.6), radius: 25)
                     .transition(.scale.combined(with: .opacity))
                 } else {
-                    // Spinning ring + progress
                     ZStack {
                         Circle()
                             .stroke(Color.red.opacity(0.15), lineWidth: 8)
@@ -877,15 +858,14 @@ struct RealLoadingView: View {
                     .shadow(color: .red.opacity(0.4), radius: 15)
                 }
 
-                // Status text
                 Group {
                     if done {
-                        Text("INJECTION COMPLETE")
+                        Text("OVERLAY ACTIVE")
                             .font(.system(size: 17, weight: .bold))
                             .foregroundColor(.green)
                     } else if failed {
                         VStack(spacing: 6) {
-                            Text("CONNECTION FAILED")
+                            Text("FAILED")
                                 .font(.system(size: 17, weight: .bold))
                                 .foregroundColor(.red)
                             Text(errorDetail)
@@ -902,7 +882,6 @@ struct RealLoadingView: View {
                 }
                 .padding(.top, 35)
 
-                // Progress bar
                 if !done && !failed {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
@@ -920,7 +899,6 @@ struct RealLoadingView: View {
                     .padding(.top, 20)
                 }
 
-                // Action buttons
                 if done {
                     Button(action: {
                         withAnimation(.easeOut(duration: 0.3)) {
@@ -973,75 +951,29 @@ struct RealLoadingView: View {
         }
         .onAppear {
             spin = true
-            startRealConnection()
+            startOverlay()
         }
     }
 
-    // MARK: - Real connection sequence
-    private func startRealConnection() {
-        let memoryManager = hackState.memoryManager
+    // MARK: - Just spawn overlay — no MLBB check
+    private func startOverlay() {
+        setStatus("Starting...", 0.2)
 
-        // Phase 1: Find MLBB
-        setStatus("Finding MLBB process...", 0.15)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            setStatus("Spawning overlay...", 0.5)
+        }
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            setStatus("Activating ESP...", 0.8)
+        }
 
-           guard let pid = ProcessFinder.findPID(byName: "legends")
-        ?? ProcessFinder.findPID(byName: "MLBB")
-        ?? ProcessFinder.findPID(byName: "MobileLegends") else {
-                DispatchQueue.main.async {
-                    fail("MLBB is not running. Open the game and get into a match first, then try again.")
-                }
-                return
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            hackState.spawnOverlay()
+            setStatus("Done", 1.0)
 
-            // Phase 2: Attach
-            DispatchQueue.main.async {
-                setStatus("Attaching to PID \(pid)...", 0.35)
-            }
-
-            guard memoryManager.attach(to: pid) else {
-                DispatchQueue.main.async {
-                    fail("Cannot attach to MLBB. Make sure you're on TrollStore or Jailbroken with proper entitlements.")
-                }
-                return
-            }
-
-            // Phase 3: Module base
-            DispatchQueue.main.async {
-                setStatus("Locating game module...", 0.55)
-            }
-
-            guard let base = memoryManager.findModuleBase(named: "MLBB") else {
-                DispatchQueue.main.async {
-                    fail("Module base not found. MLBB might be running under a different binary name.")
-                }
-                return
-            }
-
-            // Phase 4: Reading memory
-            DispatchQueue.main.async {
-                setStatus("Reading game memory...", 0.75)
-            }
-
-            Thread.sleep(forTimeInterval: 0.3)
-
-            // Phase 5: Spawn overlay
-            DispatchQueue.main.async {
-                setStatus("Attaching ESP modules...", 0.9)
-            }
-
-            DispatchQueue.main.async {
-                hackState.mlbbPID = pid
-                hackState.baseAddress = base
-                hackState.spawnOverlay()
-
-                setStatus("Finalizing...", 1.0)
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                        done = true
-                    }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                    done = true
                 }
             }
         }
@@ -1053,24 +985,16 @@ struct RealLoadingView: View {
             progress = p
         }
     }
-
-    private func fail(_ detail: String) {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-            failed = true
-            errorDetail = detail
-        }
-    }
 }
 
 // ============================================================
-// MARK: - HACK STATE (Core state manager)
+// MARK: - HACK STATE
 // ============================================================
 class HackState: ObservableObject {
     static let shared = HackState()
 
     let version = "0.1"
 
-    // Connection state
     @Published var isConnected = false
     @Published var isTransitioning = false
     @Published var statusText = "Not Connected"
@@ -1079,7 +1003,6 @@ class HackState: ObservableObject {
     @Published var currentFPS: Int = 0
     @Published var entityCount: Int = 0
 
-    // ESP feature toggles
     @Published var showBoxESP = true
     @Published var showHealthBar = true
     @Published var showDistance = true
@@ -1087,31 +1010,28 @@ class HackState: ObservableObject {
     @Published var showLevel = true
     @Published var showHealthText = false
 
-    // ESP appearance
     @Published var enemyColor = UIColor(red: 1.0, green: 0.25, blue: 0.25, alpha: 0.9)
     @Published var allyColor = UIColor(red: 0.25, green: 1.0, blue: 0.25, alpha: 0.9)
     @Published var boxThickness: Double = 1.5
     @Published var boxGlow: Double = 4.0
 
-    // Core objects
     let memoryManager = MemoryManager()
     private var overlayController: OverlayController?
 
-    // MARK: - Spawn overlay
+    // MARK: - Spawn overlay immediately
     func spawnOverlay() {
         overlayController = OverlayController(
             memoryManager: memoryManager,
-            baseAddress: baseAddress,
+            baseAddress: 0,
             settings: self
         )
         overlayController?.start()
-        isConnected = true
-        statusText = "Connected"
+        statusText = "Waiting for MLBB..."
     }
 
     // MARK: - Stop
     func stopHack() {
-        guard isConnected else { return }
+        guard !isTransitioning else { return }
         isTransitioning = true
 
         overlayController?.stop()
@@ -1129,7 +1049,7 @@ class HackState: ObservableObject {
         }
     }
 
-    // MARK: - Reset (retry)
+    // MARK: - Reset
     func resetState() {
         overlayController?.stop()
         overlayController = nil
